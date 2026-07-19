@@ -1,0 +1,24 @@
+# Local credentials and certificates
+**/secrets.h
+SECRET_SSID.txt
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Java / Maven
+**/target/
+**/out/
+*.class
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+

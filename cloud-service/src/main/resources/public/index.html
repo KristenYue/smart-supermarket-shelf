@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SmartShelf Pro</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#667085; --line:#e4e7ec; --blue:#155eef; --green:#067647; --red:#b42318; --amber:#b54708; --bg:#f4f7fb; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px/1.45 Inter,Segoe UI,Arial,sans-serif; color:var(--ink); background:var(--bg); }
+    header { color:white; padding:24px clamp(18px,4vw,56px); background:linear-gradient(125deg,#101828,#1849a9); box-shadow:0 8px 30px #102a5630; }
+    header h1 { margin:0; font-size:clamp(24px,4vw,38px); letter-spacing:-.04em; }
+    header p { margin:6px 0 0; color:#d1e0ff; }
+    .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:18px; }
+    input,button { border:1px solid #ffffff55; border-radius:9px; padding:9px 12px; font:inherit; }
+    input { min-width:260px; color:white; background:#ffffff14; outline:none; }
+    input::placeholder { color:#d1e0ff; }
+    button { cursor:pointer; font-weight:700; color:var(--ink); background:white; }
+    button:hover { transform:translateY(-1px); }
+    #connection { margin-left:auto; padding:7px 10px; border-radius:999px; background:#ffffff20; }
+    main { max-width:1280px; margin:0 auto; padding:26px clamp(14px,3vw,34px) 50px; }
+    .notice { display:none; margin-bottom:18px; padding:12px 14px; border:1px solid #fecdca; border-radius:10px; color:var(--red); background:#fef3f2; }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
+    .shelf { overflow:hidden; border:1px solid var(--line); border-radius:16px; background:white; box-shadow:0 4px 16px #1018280d; }
+    .shelf-head { display:flex; justify-content:space-between; gap:12px; padding:18px 20px; border-bottom:1px solid var(--line); }
+    .shelf h2 { margin:0; font-size:20px; }
+    .shelf-head p { margin:4px 0 0; color:var(--muted); }
+    .status { align-self:flex-start; padding:6px 10px; border-radius:999px; font-size:12px; font-weight:800; background:#f2f4f7; }
+    .status.normal { color:var(--green); background:#ecfdf3; }
+    .status.alert { color:var(--red); background:#fef3f2; }
+    .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line); }
+    .metric { min-height:87px; padding:13px 15px; background:white; }
+    .metric small { display:block; color:var(--muted); }
+    .metric strong { display:block; margin-top:5px; font-size:21px; }
+    .analysis { margin:16px 18px 0; padding:12px 14px; border-left:4px solid var(--blue); border-radius:8px; background:#f5f8ff; }
+    .analysis strong { display:block; margin-bottom:3px; }
+    .chart-wrap { height:235px; padding:16px 18px; }
+    .commands { display:flex; flex-wrap:wrap; gap:8px; padding:0 18px 18px; }
+    .commands button { border-color:var(--line); background:#f8fafc; }
+    .commands button.primary { color:white; border-color:var(--blue); background:var(--blue); }
+    footer { max-width:1280px; margin:auto; padding:0 34px 26px; color:var(--muted); text-align:center; }
+    @media (max-width:850px) { .grid { grid-template-columns:1fr; } #connection { margin-left:0; } }
+    @media (max-width:520px) { .metrics { grid-template-columns:repeat(2,1fr); } input { min-width:100%; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>SmartShelf Pro</h1>
+    <p>Secure inventory, environment and customer-engagement monitoring</p>
+    <div class="toolbar">
+      <input id="token" type="password" autocomplete="off" placeholder="API token (kept only in this browser tab)">
+      <button id="apply-token">Apply token</button>
+      <button id="refresh">Refresh now</button>
+      <span id="connection">Connecting…</span>
+    </div>
+  </header>
+
+  <main>
+    <div id="notice" class="notice"></div>
+    <div class="grid">
+      <section class="shelf" data-device="smart-shelf-01">
+        <div class="shelf-head">
+          <div><h2>Shelf 1</h2><p>Environment and engagement</p></div>
+          <span class="status">NO DATA</span>
+        </div>
+        <div class="metrics">
+          <div class="metric"><small>Temperature</small><strong data-field="temperatureC">—</strong></div>
+          <div class="metric"><small>Humidity</small><strong data-field="humidityPct">—</strong></div>
+          <div class="metric"><small>Pressure</small><strong data-field="pressureKPa">—</strong></div>
+          <div class="metric"><small>Distance</small><strong data-field="distanceCm">—</strong></div>
+          <div class="metric"><small>Visitors</small><strong data-field="visitorCount">—</strong></div>
+          <div class="metric"><small>Interactions</small><strong data-field="interactionCount">—</strong></div>
+        </div>
+        <div class="analysis"><strong>Analysis</strong><span>Waiting for telemetry…</span></div>
+        <div class="chart-wrap"><canvas></canvas></div>
+        <div class="commands">
+          <button class="primary" data-command="ON">LED on</button>
+          <button data-command="FLASH">Flash</button>
+          <button data-command="OFF">LED off</button>
+          <button data-command="AUTO">Automatic</button>
+        </div>
+      </section>
+
+      <section class="shelf" data-device="smart-shelf-02">
+        <div class="shelf-head">
+          <div><h2>Shelf 2</h2><p>Inventory and assistance</p></div>
+          <span class="status">NO DATA</span>
+        </div>
+        <div class="metrics">
+          <div class="metric"><small>Weight</small><strong data-field="weightG">—</strong></div>
+          <div class="metric"><small>Light minimum</small><strong data-field="lightRaw">—</strong></div>
+          <div class="metric"><small>Sound maximum</small><strong data-field="soundRaw">—</strong></div>
+          <div class="metric"><small>Button</small><strong data-field="buttonPressed">—</strong></div>
+          <div class="metric"><small>Scale</small><strong data-field="scaleHealthy">—</strong></div>
+          <div class="metric"><small>Device state</small><strong data-field="state">—</strong></div>
+        </div>
+        <div class="analysis"><strong>Analysis</strong><span>Waiting for telemetry…</span></div>
+        <div class="chart-wrap"><canvas></canvas></div>
+        <div class="commands">
+          <button class="primary" data-command="ON">Alarm LED on</button>
+          <button data-command="FLASH">Flash</button>
+          <button data-command="OFF">Alarm off</button>
+          <button data-command="AUTO">Automatic</button>
+          <button data-command="ACK">Acknowledge</button>
+        </div>
+      </section>
+    </div>
+  </main>
+  <footer>No permanent AWS credentials are stored in this page.</footer>
+
+  <script>
+    const shelves = [...document.querySelectorAll('.shelf')];
+    const charts = new Map();
+    const tokenInput = document.querySelector('#token');
+    tokenInput.value = sessionStorage.getItem('smartShelfApiToken') || '';
+
+    const units = {
+      temperatureC: value => `${Number(value).toFixed(1)} °C`,
+      humidityPct: value => `${Number(value).toFixed(1)} %`,
+      pressureKPa: value => `${Number(value).toFixed(1)} kPa`,
+      distanceCm: value => Number(value) < 0 ? 'No echo' : `${Number(value).toFixed(0)} cm`,
+      weightG: value => Number(value) < 0 ? 'Unavailable' : `${Number(value).toFixed(1)} g`,
+      buttonPressed: value => value ? 'Pressed' : 'Idle',
+      scaleHealthy: value => value ? 'Online' : 'Fault'
+    };
+
+    function headers(json = false) {
+      const result = {};
+      const token = sessionStorage.getItem('smartShelfApiToken');
+      if (token) result['X-API-Token'] = token;
+      if (json) result['Content-Type'] = 'application/json';
+      return result;
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, { ...options, headers: { ...headers(Boolean(options.body)), ...(options.headers || {}) } });
+      if (!response.ok) throw new Error(`${response.status}: ${(await response.json().catch(() => ({}))).error || response.statusText}`);
+      return response.json();
+    }
+
+    function showError(error) {
+      const notice = document.querySelector('#notice');
+      notice.textContent = `Dashboard update failed — ${error.message}`;
+      notice.style.display = 'block';
+      document.querySelector('#connection').textContent = 'Disconnected';
+    }
+
+    function valueText(key, value) {
+      if (value === undefined || value === null) return '—';
+      return units[key] ? units[key](value) : String(value);
+    }
+
+    function renderShelf(section, telemetry, analysis) {
+      section.querySelectorAll('[data-field]').forEach(element => {
+        const key = element.dataset.field;
+        element.textContent = valueText(key, telemetry[key]);
+      });
+
+      const state = analysis?.state || telemetry.state || 'NORMAL';
+      const status = section.querySelector('.status');
+      status.textContent = state;
+      status.className = `status ${state === 'NORMAL' ? 'normal' : 'alert'}`;
+      section.querySelector('.analysis span').textContent = analysis?.advice || 'Analysis is not available yet';
+    }
+
+    function updateChart(section, rows) {
+      const device = section.dataset.device;
+      const key = device === 'smart-shelf-01' ? 'temperatureC' : 'weightG';
+      const label = device === 'smart-shelf-01' ? 'Temperature (°C)' : 'Weight (g)';
+      const ordered = [...rows].reverse();
+      const labels = ordered.map(row => new Date(Number(row.timestamp) * 1000).toLocaleTimeString());
+      const values = ordered.map(row => Number(row[key]));
+
+      if (!charts.has(device)) {
+        charts.set(device, new Chart(section.querySelector('canvas'), {
+          type: 'line',
+          data: { labels, datasets: [{ label, data: values, borderColor:'#155eef', backgroundColor:'#155eef18', fill:true, tension:.3, pointRadius:1 }] },
+          options: { responsive:true, maintainAspectRatio:false, animation:false, plugins:{ legend:{ display:true } }, scales:{ x:{ ticks:{ maxTicksLimit:6 } } } }
+        }));
+      } else {
+        const chart = charts.get(device);
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = values;
+        chart.update();
+      }
+    }
+
+    async function refresh() {
+      try {
+        await api('/api/health');
+        await Promise.all(shelves.map(async section => {
+          const id = section.dataset.device;
+          const [telemetryRows, analysisRows] = await Promise.all([
+            api(`/api/shelves/${id}/telemetry?limit=50`),
+            api(`/api/shelves/${id}/analysis?limit=1`)
+          ]);
+          if (telemetryRows.length) {
+            renderShelf(section, telemetryRows[0], analysisRows[0]);
+            updateChart(section, telemetryRows);
+          }
+        }));
+        document.querySelector('#notice').style.display = 'none';
+        document.querySelector('#connection').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+      } catch (error) {
+        showError(error);
+      }
+    }
+
+    async function sendCommand(device, action) {
+      try {
+        await api(`/api/shelves/${device}/commands`, { method:'POST', body:JSON.stringify({ action }) });
+        document.querySelector('#connection').textContent = `${action} sent to ${device}`;
+      } catch (error) { showError(error); }
+    }
+
+    document.querySelector('#apply-token').addEventListener('click', () => {
+      sessionStorage.setItem('smartShelfApiToken', tokenInput.value.trim());
+      refresh();
+    });
+    document.querySelector('#refresh').addEventListener('click', refresh);
+    shelves.forEach(section => section.querySelectorAll('[data-command]').forEach(button => {
+      button.addEventListener('click', () => sendCommand(section.dataset.device, button.dataset.command));
+    }));
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
+

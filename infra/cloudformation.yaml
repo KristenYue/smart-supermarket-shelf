@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SmartShelf telemetry storage, analysis storage, IoT ingestion rule and device policy
+
+Resources:
+  TelemetryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: SmartShelfTelemetry
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: deviceID
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: N
+      KeySchema:
+        - AttributeName: deviceID
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  AnalysisTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: SmartShelfAnalysis
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: deviceID
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: N
+      KeySchema:
+        - AttributeName: deviceID
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  IoTRuleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WriteSmartShelfTelemetry
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: dynamodb:PutItem
+                Resource: !GetAtt TelemetryTable.Arn
+
+  TelemetryRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      TopicRulePayload:
+        RuleDisabled: false
+        AwsIotSqlVersion: '2016-03-23'
+        Sql: SELECT * FROM 'smartshelf/+/telemetry'
+        Actions:
+          - DynamoDBv2:
+              PutItem:
+                TableName: !Ref TelemetryTable
+              RoleArn: !GetAtt IoTRuleRole.Arn
+
+  DevicePolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: SmartShelfDevicePolicy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: iot:Connect
+            Resource:
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:client/smart-shelf-01
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:client/smart-shelf-02
+          - Effect: Allow
+            Action: iot:Publish
+            Resource: !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/smartshelf/*
+          - Effect: Allow
+            Action: iot:Subscribe
+            Resource:
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/smartshelf/cmd/*
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/smartshelf/*/config
+          - Effect: Allow
+            Action: iot:Receive
+            Resource:
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/smartshelf/cmd/*
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/smartshelf/*/config
+
+Outputs:
+  TelemetryTableName:
+    Value: !Ref TelemetryTable
+  AnalysisTableName:
+    Value: !Ref AnalysisTable
+  DevicePolicyName:
+    Value: !Ref DevicePolicy
