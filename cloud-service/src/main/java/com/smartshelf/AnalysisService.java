@@ -38,7 +38,7 @@ final class AnalysisService implements Runnable {
         lastProcessed.put(deviceId, timestamp);
     }
 
-    private static Map<String, Object> analyzeShelf1(String deviceId, long timestamp, Map<String, Object> t) {
+    static Map<String, Object> analyzeShelf1(String deviceId, long timestamp, Map<String, Object> t) {
         double temperature = decimal(t, "temperatureC", Double.NaN);
         double humidity = decimal(t, "humidityPct", Double.NaN);
         double pressure = decimal(t, "pressureKPa", Double.NaN);
@@ -66,7 +66,7 @@ final class AnalysisService implements Runnable {
         return out;
     }
 
-    private static Map<String, Object> analyzeShelf2(String deviceId, long timestamp, Map<String, Object> t) {
+    static Map<String, Object> analyzeShelf2(String deviceId, long timestamp, Map<String, Object> t) {
         double weight = decimal(t, "weightG", -1);
         long light = number(t, "lightRaw", -1);
         long sound = number(t, "soundRaw", -1);
@@ -133,4 +133,3 @@ final class AnalysisService implements Runnable {
         return value == null ? fallback : Boolean.parseBoolean(value.toString());
     }
 }
-

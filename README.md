@@ -317,6 +317,17 @@ http://127.0.0.1:8080
 
 原来的 `Back.ino` 没有继续使用。它使用公共匿名 MQTT Broker，并且包含写死的 Wi-Fi 信息。优化后的两个货架固件已经直接集成了经过 AWS IoT TLS 验证的远程控制功能。
 
+## 自动化测试
+
+云服务包含环境告警、交互率、缺货和人工报警的单元测试。在项目根目录执行：
+
+```powershell
+cd cloud-service
+mvn test
+```
+
+推送到 GitHub 后，GitHub Actions 会使用 Java 17 自动运行测试并构建可执行 JAR。Arduino 固件仍需根据实际开发板、传感器接线和证书配置在本地完成编译与实物验证。
+
 ## 上传到 GitHub
 
 第一次上传：
@@ -338,4 +349,3 @@ git status
 git commit -m "说明本次修改内容"
 git push
 ```
-
