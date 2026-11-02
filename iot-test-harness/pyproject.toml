@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-shelf-iot-test-harness"
+version = "1.0.0"
+description = "Hardware-independent contract, fault-injection and stability tests for the Smart Shelf AIoT pipeline"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0,<10",
+  "pytest-cov>=5.0,<8",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "stability: deterministic high-volume stability checks",
+  "live: tests requiring real hardware or AWS IoT credentials",
+]

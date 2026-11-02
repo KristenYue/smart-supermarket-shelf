@@ -11,6 +11,27 @@ permissions:
   contents: read
 
 jobs:
+  iot-test-harness:
+    name: Python AIoT 自动化测试
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: iot-test-harness
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: iot-test-harness/pyproject.toml
+      - name: 安装测试依赖
+        run: python -m pip install -e ".[test]"
+      - name: 运行契约、异常和端到端测试
+        run: python -m pytest --cov=smart_shelf_testing --cov-report=term-missing --cov-fail-under=90
+      - name: 运行50000条消息稳定性场景
+        run: python tools/run_stability.py --messages 50000
+
   cloud-service:
     name: Java 云服务测试
     runs-on: ubuntu-latest

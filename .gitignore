@@ -22,3 +22,10 @@ Thumbs.db
 # Logs
 *.log
 
+# Python test artifacts
+**/__pycache__/
+**/.pytest_cache/
+**/.coverage
+**/htmlcov/
+**/*.egg-info/
+

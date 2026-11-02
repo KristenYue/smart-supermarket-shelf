@@ -328,6 +328,25 @@ mvn test
 
 推送到 GitHub 后，GitHub Actions 会使用 Java 17 自动运行测试并构建可执行 JAR。Arduino 固件仍需根据实际开发板、传感器接线和证书配置在本地完成编译与实物验证。
 
+### Python AIoT测试框架
+
+`iot-test-harness/` 提供设备—MQTT—云端链路的硬件无关自动化测试，覆盖：
+
+- 两类货架遥测JSON契约和传感器边界值；
+- MQTT命令主题、设备隔离、命令与配置白名单；
+- 重复消息幂等、乱序拒绝和同时间戳冲突检测；
+- 断线重连指数退避和恢复后的数据连续性；
+- 50000条遥测消息的确定性稳定性与故障注入场景。
+
+```powershell
+cd iot-test-harness
+python -m pip install -e ".[test]"
+python -m pytest
+python tools/run_stability.py --messages 50000
+```
+
+完整范围、分层策略和通过标准见[`iot-test-harness/docs/TEST_PLAN.md`](iot-test-harness/docs/TEST_PLAN.md)，本地实测结果见[`iot-test-harness/docs/TEST_REPORT.md`](iot-test-harness/docs/TEST_REPORT.md)。该自动化模块不能替代Arduino实物、传感器精度、Wi-Fi弱网、TLS证书和AWS IoT在线验证，相关结果只有在真实环境执行后才会记录。
+
 ## 上传到 GitHub
 
 第一次上传：
