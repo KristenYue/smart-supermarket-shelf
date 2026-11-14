@@ -1,0 +1,6 @@
+add_library(smart_shelf_core INTERFACE)
+target_include_directories(smart_shelf_core INTERFACE include)
+
+add_executable(smart_shelf_core_tests tests/test_core.cpp)
+target_link_libraries(smart_shelf_core_tests PRIVATE smart_shelf_core)
+add_test(NAME smart_shelf_core_tests COMMAND smart_shelf_core_tests)

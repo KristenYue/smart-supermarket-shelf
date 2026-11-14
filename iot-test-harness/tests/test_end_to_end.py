@@ -33,6 +33,12 @@ def test_remote_command_targets_exact_device_only():
 def test_reconnected_device_can_continue_with_new_timestamp(shelf1_payload):
     gateway = TelemetryGateway()
     gateway.ingest(shelf1_payload)
-    after_reconnect = dict(shelf1_payload, timestamp=shelf1_payload["timestamp"] + 5, customerPresent=False)
+    after_reconnect = dict(
+        shelf1_payload,
+        sequence=2,
+        messageId="smart-shelf-01:1001:2",
+        timestamp=shelf1_payload["timestamp"] + 5,
+        customerPresent=False,
+    )
     assert gateway.ingest(after_reconnect) is IngestResult.ACCEPTED
     assert gateway.latest("smart-shelf-01")["customerPresent"] is False

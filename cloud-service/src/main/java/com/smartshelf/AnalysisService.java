@@ -8,7 +8,7 @@ import java.util.concurrent.ConcurrentHashMap;
 final class AnalysisService implements Runnable {
     private final DynamoRepository repository;
     private final Config config;
-    private final Map<String, Long> lastProcessed = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastProcessedSequenceBySession = new ConcurrentHashMap<>();
 
     AnalysisService(DynamoRepository repository, Config config) {
         this.repository = repository;
@@ -20,8 +20,9 @@ final class AnalysisService implements Runnable {
         for (String deviceId : config.deviceIds()) {
             try {
                 repository.latestTelemetry(deviceId, 25).stream()
-                        .sorted((left, right) -> Long.compare(number(left, "timestamp", 0), number(right, "timestamp", 0)))
-                        .filter(item -> number(item, "timestamp", 0) > lastProcessed.getOrDefault(deviceId, 0L))
+                        .sorted((left, right) -> Long.compare(orderingSequence(left), orderingSequence(right)))
+                        .filter(item -> orderingSequence(item) > lastProcessedSequenceBySession
+                                .getOrDefault(sessionKey(deviceId, item), 0L))
                         .forEach(item -> process(deviceId, item));
             } catch (RuntimeException error) {
                 System.err.println("Analysis poll failed for " + deviceId + ": " + error.getMessage());
@@ -30,12 +31,29 @@ final class AnalysisService implements Runnable {
     }
 
     private void process(String deviceId, Map<String, Object> telemetry) {
-        long timestamp = number(telemetry, "timestamp", Instant.now().getEpochSecond());
+        long deviceTimestamp = number(telemetry, "timestamp", 0);
+        long receivedAtMillis = number(telemetry, "receivedAt", Instant.now().toEpochMilli());
+        long timestamp = deviceTimestamp > 0 ? deviceTimestamp : receivedAtMillis / 1000;
+        long sequence = orderingSequence(telemetry);
         Map<String, Object> result = deviceId.equals("smart-shelf-01")
                 ? analyzeShelf1(deviceId, timestamp, telemetry)
                 : analyzeShelf2(deviceId, timestamp, telemetry);
+        result.put("sourceSequence", sequence);
+        result.put("sourceBootId", number(telemetry, "bootId", 0));
+        result.put("deviceTimestamp", deviceTimestamp);
+        result.put("receivedAt", receivedAtMillis);
+        result.put("sourceMessageId", telemetry.getOrDefault(
+                "messageId", sessionKey(deviceId, telemetry) + ":" + sequence));
         repository.putAnalysis(result);
-        lastProcessed.put(deviceId, timestamp);
+        lastProcessedSequenceBySession.put(sessionKey(deviceId, telemetry), sequence);
+    }
+
+    static long orderingSequence(Map<String, Object> telemetry) {
+        return number(telemetry, "sequence", number(telemetry, "timestamp", 0));
+    }
+
+    static String sessionKey(String deviceId, Map<String, Object> telemetry) {
+        return deviceId + ":" + number(telemetry, "bootId", 0);
     }
 
     static Map<String, Object> analyzeShelf1(String deviceId, long timestamp, Map<String, Object> t) {

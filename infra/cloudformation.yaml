@@ -5,17 +5,17 @@ Resources:
   TelemetryTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: SmartShelfTelemetry
+      TableName: SmartShelfTelemetryV2
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: deviceID
           AttributeType: S
-        - AttributeName: timestamp
+        - AttributeName: receivedAt
           AttributeType: N
       KeySchema:
         - AttributeName: deviceID
           KeyType: HASH
-        - AttributeName: timestamp
+        - AttributeName: receivedAt
           KeyType: RANGE
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
@@ -63,7 +63,7 @@ Resources:
       TopicRulePayload:
         RuleDisabled: false
         AwsIotSqlVersion: '2016-03-23'
-        Sql: SELECT * FROM 'smartshelf/+/telemetry'
+        Sql: SELECT *, timestamp() AS receivedAt FROM 'smartshelf/+/telemetry'
         Actions:
           - DynamoDBv2:
               PutItem:
@@ -79,22 +79,26 @@ Resources:
         Statement:
           - Effect: Allow
             Action: iot:Connect
-            Resource:
-              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:client/smart-shelf-01
-              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:client/smart-shelf-02
+            Resource: !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:client/${!iot:Connection.Thing.ThingName}
+            Condition:
+              Bool:
+                iot:Connection.Thing.IsAttached: 'true'
           - Effect: Allow
             Action: iot:Publish
-            Resource: !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/smartshelf/*
+            Resource:
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/smartshelf/${!iot:Connection.Thing.ThingName}/telemetry
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/smartshelf/${!iot:Connection.Thing.ThingName}/events
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/smartshelf/${!iot:Connection.Thing.ThingName}/alerts
           - Effect: Allow
             Action: iot:Subscribe
             Resource:
-              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/smartshelf/cmd/*
-              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/smartshelf/*/config
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/smartshelf/cmd/${!iot:Connection.Thing.ThingName}
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/smartshelf/${!iot:Connection.Thing.ThingName}/config
           - Effect: Allow
             Action: iot:Receive
             Resource:
-              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/smartshelf/cmd/*
-              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/smartshelf/*/config
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/smartshelf/cmd/${!iot:Connection.Thing.ThingName}
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/smartshelf/${!iot:Connection.Thing.ThingName}/config
 
 Outputs:
   TelemetryTableName:

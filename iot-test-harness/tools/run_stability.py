@@ -12,9 +12,16 @@ from smart_shelf_testing import TelemetryGateway
 
 
 def shelf1(timestamp: int, index: int) -> dict[str, object]:
+    sequence = index // 2 + 1
+    boot_id = 1001
     return {
         "deviceID": "smart-shelf-01",
+        "schemaVersion": "2.0",
+        "messageId": f"smart-shelf-01:{boot_id}:{sequence}",
+        "bootId": boot_id,
+        "sequence": sequence,
         "timestamp": timestamp,
+        "timeSynchronized": True,
         "temperatureC": 5.0 + (index % 10) / 10,
         "humidityPct": 45.0 + index % 20,
         "pressureKPa": 101.3,
@@ -29,9 +36,16 @@ def shelf1(timestamp: int, index: int) -> dict[str, object]:
 
 def shelf2(timestamp: int, index: int) -> dict[str, object]:
     weight = float(100 - index % 80)
+    sequence = index // 2 + 1
+    boot_id = 2001
     return {
         "deviceID": "smart-shelf-02",
+        "schemaVersion": "2.0",
+        "messageId": f"smart-shelf-02:{boot_id}:{sequence}",
+        "bootId": boot_id,
+        "sequence": sequence,
         "timestamp": timestamp,
+        "timeSynchronized": True,
         "weightG": weight,
         "soundRaw": index % 200,
         "lightRaw": 200 + index % 700,
@@ -57,7 +71,11 @@ def run(message_count: int, seed: int) -> dict[str, object]:
         if roll < 0.02 and device_id in last_payload:
             payload = dict(last_payload[device_id])
         elif roll < 0.03 and device_id in last_payload:
-            payload["timestamp"] = int(last_payload[device_id]["timestamp"]) - 1
+            previous_sequence = int(last_payload[device_id]["sequence"])
+            payload["sequence"] = previous_sequence - 1
+            payload["messageId"] = (
+                f"{device_id}:{payload['bootId']}:{previous_sequence - 1}"
+            )
         result = gateway.ingest(payload)
         counts[result.value] += 1
         if result.value == "accepted":

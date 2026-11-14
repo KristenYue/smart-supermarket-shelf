@@ -7,7 +7,12 @@ import pytest
 def shelf1_payload() -> dict[str, object]:
     return {
         "deviceID": "smart-shelf-01",
+        "schemaVersion": "2.0",
+        "messageId": "smart-shelf-01:1001:1",
+        "bootId": 1001,
+        "sequence": 1,
         "timestamp": 1_800_000_000,
+        "timeSynchronized": True,
         "temperatureC": 5.0,
         "humidityPct": 50.0,
         "pressureKPa": 101.3,
@@ -24,7 +29,12 @@ def shelf1_payload() -> dict[str, object]:
 def shelf2_payload() -> dict[str, object]:
     return {
         "deviceID": "smart-shelf-02",
+        "schemaVersion": "2.0",
+        "messageId": "smart-shelf-02:2001:1",
+        "bootId": 2001,
+        "sequence": 1,
         "timestamp": 1_800_000_000,
+        "timeSynchronized": True,
         "weightG": 80.0,
         "soundRaw": 20,
         "lightRaw": 500,

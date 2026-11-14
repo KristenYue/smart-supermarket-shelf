@@ -27,17 +27,18 @@ def test_duplicate_message_is_idempotent(shelf1_payload):
 
 def test_out_of_order_message_is_not_persisted(shelf1_payload):
     gateway = TelemetryGateway()
+    shelf1_payload.update(sequence=2, messageId="smart-shelf-01:1001:2")
     assert gateway.ingest(shelf1_payload) is IngestResult.ACCEPTED
-    older = dict(shelf1_payload, timestamp=shelf1_payload["timestamp"] - 1)
+    older = dict(shelf1_payload, sequence=1, messageId="smart-shelf-01:1001:1")
     assert gateway.ingest(older) is IngestResult.OUT_OF_ORDER
     assert len(gateway.records) == 1
 
 
-def test_same_timestamp_with_different_payload_is_conflict(shelf1_payload):
+def test_same_sequence_with_different_payload_is_conflict(shelf1_payload):
     gateway = TelemetryGateway()
     assert gateway.ingest(shelf1_payload) is IngestResult.ACCEPTED
     conflicting = dict(shelf1_payload, temperatureC=7.5)
-    assert gateway.ingest(conflicting) is IngestResult.TIMESTAMP_CONFLICT
+    assert gateway.ingest(conflicting) is IngestResult.PAYLOAD_CONFLICT
 
 
 def test_device_ordering_is_tracked_independently(shelf1_payload, shelf2_payload):
@@ -46,6 +47,44 @@ def test_device_ordering_is_tracked_independently(shelf1_payload, shelf2_payload
     shelf2_payload["timestamp"] -= 10
     assert gateway.ingest(shelf2_payload) is IngestResult.ACCEPTED
     assert len(gateway.records) == 2
+
+
+def test_sequence_ordering_survives_unsynchronized_clock(shelf1_payload):
+    gateway = TelemetryGateway()
+    first = dict(
+        shelf1_payload,
+        sequence=1,
+        messageId="smart-shelf-01:1001:1",
+        timestamp=0,
+        timeSynchronized=False,
+    )
+    second = dict(
+        shelf1_payload,
+        sequence=2,
+        messageId="smart-shelf-01:1001:2",
+        timestamp=1_800_000_000,
+        timeSynchronized=True,
+    )
+    assert gateway.ingest(first) is IngestResult.ACCEPTED
+    assert gateway.ingest(second) is IngestResult.ACCEPTED
+
+
+def test_new_boot_session_may_restart_sequence(shelf1_payload):
+    gateway = TelemetryGateway()
+    first_boot = dict(
+        shelf1_payload,
+        sequence=20,
+        messageId="smart-shelf-01:1001:20",
+    )
+    after_reboot = dict(
+        shelf1_payload,
+        bootId=1002,
+        sequence=1,
+        messageId="smart-shelf-01:1002:1",
+        timestamp=shelf1_payload["timestamp"] + 1,
+    )
+    assert gateway.ingest(first_boot) is IngestResult.ACCEPTED
+    assert gateway.ingest(after_reboot) is IngestResult.ACCEPTED
 
 
 def test_latest_returns_defensive_copy(shelf2_payload):

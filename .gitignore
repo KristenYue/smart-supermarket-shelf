@@ -12,6 +12,9 @@ SECRET_SSID.txt
 **/out/
 *.class
 
+# Native build artifacts
+/build/
+
 # IDE / OS
 .idea/
 .vscode/
@@ -23,6 +26,7 @@ Thumbs.db
 *.log
 
 # Python test artifacts
+**/.venv/
 **/__pycache__/
 **/.pytest_cache/
 **/.coverage

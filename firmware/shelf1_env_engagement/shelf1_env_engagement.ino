@@ -5,6 +5,7 @@
 #include <Arduino_MKRENV.h>
 
 #include "secrets.h"
+#include "../core/include/smart_shelf/fixed_outbox.hpp"
 
 namespace Pins {
 constexpr uint8_t ultrasonic = 5;
@@ -15,6 +16,7 @@ constexpr uint8_t led = LED_BUILTIN;
 WiFiClient wifiClient;
 BearSSLClient tlsClient(wifiClient);
 MqttClient mqttClient(tlsClient);
+smart_shelf::FixedOutbox<4, 96, 512> mqttOutbox;
 
 String telemetryTopic;
 String eventsTopic;
@@ -53,6 +55,8 @@ bool remoteLedOn = false;
 int interactionCount = 0;
 int visitorCount = 0;
 int lastLightValue = 0;
+unsigned long telemetrySequence = 0;
+unsigned long bootId = 1;
 
 float temperatureC = NAN;
 float humidityPct = NAN;
@@ -85,16 +89,35 @@ String jsonEscape(const String &input) {
   return out;
 }
 
-void publishJson(const String &topic, const String &payload, bool retained = false) {
-  if (!mqttClient.connected()) return;
-  mqttClient.beginMessage(topic, payload.length(), retained, 1);
+bool sendJson(const char *topic, const char *payload, bool retained, int qos) {
+  if (!mqttClient.connected()) return false;
+  mqttClient.beginMessage(topic, strlen(payload), retained, qos);
   mqttClient.print(payload);
-  mqttClient.endMessage();
+  return mqttClient.endMessage() == 1;
+}
+
+void publishJson(const String &topic, const String &payload, bool retained = false) {
+  if (sendJson(topic.c_str(), payload.c_str(), retained, 1)) return;
+  const auto result = mqttOutbox.push(topic.c_str(), payload.c_str(), retained, 1);
+  if (result == smart_shelf::EnqueueResult::RejectedOversize) {
+    Serial.println("MQTT outbox rejected an oversized frame");
+  }
+}
+
+void flushOutbox() {
+  while (mqttClient.connected() && mqttOutbox.front() != nullptr) {
+    const auto *frame = mqttOutbox.front();
+    if (!sendJson(frame->topic.data(), frame->payload.data(), frame->retained, frame->qos)) {
+      return;
+    }
+    mqttOutbox.pop();
+  }
 }
 
 void publishEvent(const char *eventName, const String &detail) {
   String payload = "{\"deviceID\":\"" + String(AWS_CLIENT_ID) +
-                   "\",\"timestamp\":" + String(networkTime()) +
+                   "\",\"schemaVersion\":\"2.0\",\"bootId\":" + String(bootId) +
+                   ",\"timestamp\":" + String(networkTime()) +
                    ",\"event\":\"" + eventName +
                    "\",\"detail\":\"" + jsonEscape(detail) + "\"}";
   publishJson(eventsTopic, payload);
@@ -102,7 +125,8 @@ void publishEvent(const char *eventName, const String &detail) {
 
 void publishAlert(const char *type, const String &detail, bool active) {
   String payload = "{\"deviceID\":\"" + String(AWS_CLIENT_ID) +
-                   "\",\"timestamp\":" + String(networkTime()) +
+                   "\",\"schemaVersion\":\"2.0\",\"bootId\":" + String(bootId) +
+                   ",\"timestamp\":" + String(networkTime()) +
                    ",\"type\":\"" + type +
                    "\",\"active\":" + String(active ? "true" : "false") +
                    ",\"detail\":\"" + jsonEscape(detail) + "\"}";
@@ -211,8 +235,17 @@ void sampleSensors(unsigned long now) {
 }
 
 void publishTelemetry() {
+  const unsigned long sequence = ++telemetrySequence;
+  const unsigned long timestamp = networkTime();
+  const bool timeSynchronized = timestamp >= 1609459200UL;
   String payload = "{\"deviceID\":\"" + String(AWS_CLIENT_ID) +
-                   "\",\"timestamp\":" + String(networkTime()) +
+                   "\",\"schemaVersion\":\"2.0\",\"messageId\":\"" +
+                   String(AWS_CLIENT_ID) + ":" + String(bootId) + ":" + String(sequence) +
+                   "\",\"bootId\":" + String(bootId) +
+                   ",\"sequence\":" + String(sequence) +
+                   ",\"timestamp\":" + String(timeSynchronized ? timestamp : 0) +
+                   ",\"timeSynchronized\":" +
+                   String(timeSynchronized ? "true" : "false") +
                    ",\"temperatureC\":" + jsonNumber(temperatureC, 2) +
                    ",\"humidityPct\":" + jsonNumber(humidityPct, 2) +
                    ",\"pressureKPa\":" + jsonNumber(pressureKPa, 2) +
@@ -301,7 +334,8 @@ bool connectMqtt() {
   }
   mqttClient.subscribe(commandTopic);
   mqttClient.subscribe(configTopic);
-  publishEvent("boot", "Shelf 1 connected");
+  flushOutbox();
+  publishEvent("connected", "Shelf 1 MQTT session established");
   return true;
 }
 
@@ -310,6 +344,8 @@ void setup() {
   delay(1500);
   pinMode(Pins::led, OUTPUT);
   digitalWrite(Pins::led, LOW);
+  randomSeed(static_cast<unsigned long>(analogRead(Pins::light)) ^ micros());
+  bootId = static_cast<unsigned long>(random(1L, 2147483647L));
 
   telemetryTopic = "smartshelf/" + String(AWS_CLIENT_ID) + "/telemetry";
   eventsTopic = "smartshelf/" + String(AWS_CLIENT_ID) + "/events";
@@ -339,8 +375,10 @@ void loop() {
   if ((WiFi.status() != WL_CONNECTED || !mqttClient.connected()) && now >= nextConnectionAttemptMs) {
     if (!connectWiFi() || !connectMqtt()) nextConnectionAttemptMs = now + 5000;
   }
-  if (WiFi.status() != WL_CONNECTED || !mqttClient.connected()) return;
-  mqttClient.poll();
+  if (WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
+    mqttClient.poll();
+    flushOutbox();
+  }
 
   if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
     lastSampleMs = now;

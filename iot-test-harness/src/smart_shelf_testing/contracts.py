@@ -11,6 +11,7 @@ from typing import Any
 
 DEVICE_IDS = {"smart-shelf-01", "smart-shelf-02"}
 DEVICE_ID_PATTERN = re.compile(r"^smart-shelf-\d{2}$")
+TELEMETRY_SCHEMA_VERSION = "2.0"
 
 
 class ContractError(ValueError):
@@ -59,11 +60,31 @@ def validate_telemetry(payload: Any) -> dict[str, Any]:
     """Validate device telemetry and return a defensive copy."""
 
     data = _require_mapping(payload)
-    _require_keys(data, {"deviceID", "timestamp"})
+    _require_keys(
+        data,
+        {
+            "deviceID",
+            "schemaVersion",
+            "messageId",
+            "bootId",
+            "sequence",
+            "timestamp",
+            "timeSynchronized",
+        },
+    )
     device_id = data["deviceID"]
     if not isinstance(device_id, str) or device_id not in DEVICE_IDS:
         raise ContractError("deviceID is not an allowed Smart Shelf device")
-    _integer(data, "timestamp", 1, 4_102_444_800)
+    if data["schemaVersion"] != TELEMETRY_SCHEMA_VERSION:
+        raise ContractError("schemaVersion is not supported")
+    boot_id = _integer(data, "bootId", 1, 2_147_483_647)
+    sequence = _integer(data, "sequence", 1, 4_294_967_295)
+    if data["messageId"] != f"{device_id}:{boot_id}:{sequence}":
+        raise ContractError("messageId must bind deviceID, bootId and sequence")
+    timestamp = _integer(data, "timestamp", 0, 4_102_444_800)
+    synchronized = _boolean(data, "timeSynchronized")
+    if synchronized and timestamp == 0:
+        raise ContractError("synchronized telemetry requires a positive timestamp")
 
     if device_id == "smart-shelf-01":
         _require_keys(

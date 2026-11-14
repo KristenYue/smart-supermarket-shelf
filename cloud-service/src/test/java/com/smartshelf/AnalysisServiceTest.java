@@ -48,4 +48,25 @@ class AnalysisServiceTest {
 
         assertEquals("LOW_STOCK", result.get("state"));
     }
+
+    @Test
+    void orderingUsesDeviceSequenceInsteadOfWallClock() {
+        assertEquals(
+                2L,
+                AnalysisService.orderingSequence(
+                        Map.of("sequence", 2, "timestamp", 0)));
+        assertEquals(
+                1_700_000_000L,
+                AnalysisService.orderingSequence(
+                        Map.of("timestamp", 1_700_000_000L)));
+    }
+
+    @Test
+    void sequenceOrderingIsScopedToBootSession() {
+        assertEquals(
+                "smart-shelf-01:1002",
+                AnalysisService.sessionKey(
+                        "smart-shelf-01",
+                        Map.of("bootId", 1002, "sequence", 1)));
+    }
 }

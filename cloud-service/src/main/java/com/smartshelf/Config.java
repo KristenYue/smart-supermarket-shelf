@@ -21,7 +21,7 @@ record Config(
         return new Config(
                 Region.of(env("AWS_REGION", "eu-west-2")),
                 URI.create(endpoint),
-                env("TELEMETRY_TABLE", "SmartShelfTelemetry"),
+                env("TELEMETRY_TABLE", "SmartShelfTelemetryV2"),
                 env("ANALYSIS_TABLE", "SmartShelfAnalysis"),
                 env("API_TOKEN", ""),
                 env("SERVER_HOST", "127.0.0.1"),

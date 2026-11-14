@@ -1,370 +1,188 @@
-# 智能超市货架系统
+# Smart Shelf Edge-to-Cloud System
 
-这是智能超市货架项目的整理和安全优化版本。系统由两套 Arduino MKR WiFi 1010 货架节点、AWS IoT Core、DynamoDB、Java 云端服务和网页仪表盘组成。
+[![Engineering CI](https://github.com/KristenYue/smart-supermarket-shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/KristenYue/smart-supermarket-shelf/actions/workflows/ci.yml)
+![C++17](https://img.shields.io/badge/firmware-C%2B%2B17-00599C)
+![AWS IoT](https://img.shields.io/badge/cloud-AWS%20IoT-FF9900)
+![Java 17](https://img.shields.io/badge/backend-Java%2017-ED8B00)
+![Python 3.12](https://img.shields.io/badge/verification-Python%203.12-3776AB)
 
-## 项目功能
+面向智能零售场景的双节点 AIoT 系统：两台 Arduino MKR WiFi 1010 采集环境、顾客互动和库存信号，在边缘完成状态判定与现场告警，通过 ATECC608A 设备身份和 MQTT/TLS 接入 AWS IoT Core，云端完成存储、分析、查询和告警同步。
 
-### 货架 1：环境与顾客互动监测
+这个仓库重点展示的不只是“传感器接上云”，而是设备软件在断网、乱序、重复投递、未校时和设备重启条件下如何保持可解释、可验证的数据链路。
 
-设备编号：`smart-shelf-01`
+## 工程能力一览
 
-主要功能：
+| 方向 | 实现证据 |
+|---|---|
+| 嵌入式 C++ | C++17 纯状态机、固定容量 Outbox、无动态内存、阈值原子更新 |
+| 设备与安全 | Arduino MKR WiFi 1010、ATECC608A、BearSSL、独立 Thing/证书、最小权限 Topic |
+| IoT 协议 | MQTT QoS 1、命令/配置通道、Telemetry v2、重启会话、幂等与乱序处理 |
+| 云端链路 | AWS IoT Core、服务端接收时间、DynamoDB、Java 17/Javalin、Spring Boot/MySQL |
+| 研发效能 | CMake/CTest、pytest 契约与故障注入、Maven、50,000 条稳定性场景、GitHub Actions |
 
-- 使用 MKR ENV Shield 测量温度、湿度和气压
-- 使用超声波传感器判断顾客是否靠近货架
-- 使用光线传感器检测商品拿起、放回等互动行为
-- 统计访客数量、互动次数和累计停留时间
-- 环境持续异常 30 秒后产生报警
-- 通过 AWS IoT Core 接收远程 LED 控制和阈值设置
+## 实际场景
 
-### 货架 2：库存与顾客求助监测
+系统把超市货架拆为两个职责不同的边缘节点：
 
-设备编号：`smart-shelf-02`
+- `smart-shelf-01`：监测温度、湿度、气压和顾客靠近/拿放商品行为；环境持续越界后告警。
+- `smart-shelf-02`：融合重量、光线、声音和求助按钮，判断遮挡、碰撞、低库存、无库存和人工求助。
 
-主要功能：
-
-- 使用称重传感器和 HX711 检测库存重量
-- 使用光线传感器检测货架前方遮挡
-- 使用声音传感器检测碰撞或异常扰动
-- 使用实体按钮发送顾客求助请求
-- 使用 LED 和蜂鸣器提供现场报警
-- 通过 AWS IoT Core 接收远程控制命令
-
-## 系统架构
+货架 2 对多源异常执行明确优先级：
 
 ```text
-货架 1 ─┐
-        ├─ AWS IoT Core ─ IoT Rule ─ DynamoDB
-货架 2 ─┘                              │
-                                      ▼
-                              Java 分析与 API 服务
-                                      │
-                                      ▼
-                                  网页仪表盘
+人工求助 > 遮挡异常 > 声音异常 > 无库存 > 低库存 > 正常
 ```
 
-- 两块 Arduino 使用 TLS 加密连接 AWS IoT Core。
-- 设备私钥保存在 MKR WiFi 1010 的 ATECC608A 安全芯片中。
-- AWS IoT Rule 将设备遥测数据写入 DynamoDB。
-- Java 服务读取遥测数据、生成分析结果并提供网页 API。
-- 网页通过 Java API 获取数据，不直接保存 AWS Access Key。
+状态机在设备本地运行，即使云端暂时不可用，现场 LED/蜂鸣器仍能响应；恢复连接后，固定容量 Outbox 按 FIFO 补发缓存消息。
 
-## 项目目录
+## 架构
 
 ```text
-smart-supermarket-shelf-optimized/
+┌──────────────────────── Edge ────────────────────────┐
+│ Shelf 1                 Shelf 2                      │
+│ ENV + ultrasonic       HX711 + light/sound/button   │
+│ sampling + alert       C++17 priority state machine │
+│           └──── fixed-capacity MQTT outbox ────┘    │
+│                ATECC608A identity + MQTT/TLS         │
+└──────────────────────────┬───────────────────────────┘
+                           ▼
+                  AWS IoT Core / IoT Rule
+                           ▼
+                       DynamoDB
+                           ▼
+              Java analysis & control API
+                           ▼
+          dashboard / Spring alert service / MySQL
+```
+
+## 关键设计
+
+### 重启感知的 Telemetry v2
+
+每条遥测使用 `{deviceID}:{bootId}:{sequence}` 作为 `messageId`：
+
+- `sequence` 负责同一次启动内的单调顺序，不依赖网络时钟；
+- `bootId` 隔离重启前后两个序列空间；
+- `timeSynchronized` 明确区分可信时间与启动早期的 `timestamp=0`；
+- 网关识别重复消息、同身份不同载荷和乱序消息。
+- AWS IoT Rule 生成 `receivedAt` 作为 DynamoDB 排序键，避免未校时消息覆盖。
+
+详见 [Telemetry v2 协议](docs/TELEMETRY_V2.md)。
+
+### 固定容量离线队列
+
+`FixedOutbox<4, 96, 512>` 在编译期固定容量和帧上限，不依赖动态内存。断网或发送失败时入队，队列满时淘汰最旧消息并保留丢弃计数，重连后按 FIFO 恢复发送。
+
+### 可移植固件核心
+
+硬件访问留在 `.ino` 适配层；状态机、阈值约束和 Outbox 位于 `firmware/core/`，可用标准 C++17 编译器在 Windows/Linux 上直接执行单元测试。
+
+更多代码级说明见 [设计亮点](docs/DESIGN_HIGHLIGHTS.md)。
+
+## 仓库结构
+
+```text
+.
 ├─ firmware/
-│  ├─ shelf1_env_engagement/
-│  │  ├─ shelf1_env_engagement.ino
-│  │  └─ secrets.example.h
-│  ├─ shelf2_inventory_assistance/
-│  │  ├─ shelf2_inventory_assistance.ino
-│  │  └─ secrets.example.h
-│  └─ tests/
-│     └─ weight_test/
-│        └─ weight_test.ino
-├─ cloud-service/
-│  ├─ pom.xml
-│  └─ src/main/
-│     ├─ java/com/smartshelf/
-│     └─ resources/public/index.html
-├─ infra/
-│  └─ cloudformation.yaml
-├─ docs/
-├─ .gitignore
-└─ README.md
+│  ├─ core/                         # C++17 状态机、Outbox 与 CTest
+│  ├─ shelf1_env_engagement/        # 环境与顾客互动节点
+│  └─ shelf2_inventory_assistance/  # 库存与求助节点
+├─ iot-test-harness/                # Python 契约、故障注入、稳定性测试
+├─ cloud-service/                   # Java/Javalin 分析与控制 API
+├─ spring-alert-service/            # Spring Boot 告警同步与 MySQL 查询
+├─ infra/cloudformation.yaml        # DynamoDB、IoT Rule、IoT Policy
+├─ docs/                            # 协议、工程日志、Bad Case、设计说明
+└─ .github/workflows/ci.yml         # C++/Python/Java/Spring CI
 ```
 
-## MQTT 主题
+## 自动化验证
 
-| MQTT 主题 | 方向 | 用途 |
+CI 对四个层次分别给出回归证据：
+
+| 测试层 | 覆盖内容 |
+|---|---|
+| C++/CTest | 状态优先级、阈值边界、Outbox FIFO/溢出/超长帧 |
+| Python/pytest | 遥测契约、命令与配置白名单、幂等、乱序、重启、重连 |
+| Java/Maven | 环境与库存分析、来源追踪、启动会话级顺序 |
+| Spring/Maven | 告警同步、设备隔离、API 参数与 JDBC 存储 |
+
+稳定性脚本以固定随机种子发送 50,000 条双设备遥测，并注入重复和乱序，核对接收结果与持久化计数。
+
+```powershell
+# Windows：C++ 固件核心
+.\scripts\build_firmware_core.cmd
+
+# Python 协议与稳定性
+cd iot-test-harness
+python -m pip install -e ".[test]"
+python -m pytest --cov=smart_shelf_testing --cov-report=term-missing --cov-fail-under=90
+python tools/run_stability.py --messages 50000
+
+# Java 云服务
+cd ..\cloud-service
+mvn --batch-mode verify
+
+# Spring 告警扩展
+cd ..\spring-alert-service
+mvn --batch-mode test
+```
+
+测试策略见 [AIoT 测试计划](iot-test-harness/docs/TEST_PLAN.md)，实施过程见 [工程日志](docs/ENGINEERING_LOG.md)，问题闭环见 [Bad Cases](docs/BAD_CASES.md)。
+
+## MQTT 接口
+
+| Topic | 方向 | 用途 |
 |---|---|---|
-| `smartshelf/{deviceID}/telemetry` | 设备 → 云端 | 每 5 秒发送一次传感器数据 |
-| `smartshelf/{deviceID}/events` | 设备 → 云端 | 状态变化和顾客互动事件 |
-| `smartshelf/{deviceID}/alerts` | 设备 → 云端 | 报警触发与恢复事件 |
-| `smartshelf/cmd/{deviceID}` | 云端 → 设备 | LED、蜂鸣器和确认命令 |
-| `smartshelf/{deviceID}/config` | 云端 → 设备 | 远程修改报警阈值 |
+| `smartshelf/{deviceID}/telemetry` | 设备 → 云端 | 周期遥测 |
+| `smartshelf/{deviceID}/events` | 设备 → 云端 | 状态变化与互动事件 |
+| `smartshelf/{deviceID}/alerts` | 设备 → 云端 | 告警触发与恢复 |
+| `smartshelf/cmd/{deviceID}` | 云端 → 设备 | `ON/OFF/FLASH/AUTO/ACK` |
+| `smartshelf/{deviceID}/config` | 云端 → 设备 | 阈值配置 |
 
-设备支持的控制命令：
+配置先写入候选对象，完整验证上下界关系后一次性提交；非法字段、越界数值和破坏阈值关系的请求会被拒绝并产生审计事件。
 
-- `ON`：打开 LED
-- `OFF`：关闭 LED
-- `FLASH`：闪烁 LED
-- `AUTO`：恢复设备自动控制
-- `ACK`：确认货架 2 的求助报警
+## 硬件与接线
 
-## Arduino 接线
+| 节点 | 传感器/执行器 | 接口 |
+|---|---|---|
+| Shelf 1 | MKR ENV Shield | Shield / I2C |
+| Shelf 1 | Grove 超声波 | D5 |
+| Shelf 1 | Grove 光线 | A1 |
+| Shelf 1 | 告警 LED | `LED_BUILTIN` |
+| Shelf 2 | HX711 I2C 称重模块 | I2C |
+| Shelf 2 | 声音 / 光线 | A0 / A1 |
+| Shelf 2 | 求助按钮 / LED / 蜂鸣器 | D4 / D3 / D2 |
 
-### 货架 1
+Arduino 库：`WiFiNINA`、`ArduinoMqttClient`、`ArduinoBearSSL`、`ArduinoECCX08`、`Arduino_MKRENV`、`DFRobot_HX711_I2C`。
 
-| 硬件 | 引脚或接口 |
-|---|---|
-| MKR ENV Shield | I2C / Shield 接口 |
-| Grove 超声波传感器 | D5 |
-| Grove 光线传感器 | A1 |
-| 报警 LED | `LED_BUILTIN` |
+## 设备与云端配置
 
-### 货架 2
+1. 为两台设备分别创建 AWS IoT Thing、Client ID 和证书。
+2. 将证书分别绑定到对应 Thing，并将私钥写入各自 ATECC608A 槽位；Client ID 必须与 Thing Name 相同。
+3. 将 `secrets.example.h` 复制为 `secrets.h`，填写 Wi-Fi、IoT Endpoint、Client ID 和设备证书。
+4. 部署 `infra/cloudformation.yaml` 创建 DynamoDB 表、IoT Rule 与最小权限 Policy。
+5. 在 Arduino IDE 中选择 MKR WiFi 1010，分别验证并上传两个固件。
 
-| 硬件 | 引脚或接口 |
-|---|---|
-| HX711 I2C 称重模块 | I2C |
-| 声音传感器 | A0 |
-| 光线传感器 | A1 |
-| 顾客求助按钮 | D4 |
-| LED | D3 |
-| 蜂鸣器 | D2 |
+`secrets.h`、`.env`、私钥和证书文件已加入 `.gitignore`。Java 服务通过 AWS Profile、IAM Role 或临时凭据访问云资源，不在源码和前端中保存 Access Key。
 
-按钮使用 `INPUT_PULLUP` 模式，因此按下时读取为 `LOW`。
-
-## 安装 Arduino 库
-
-打开 Arduino IDE，进入：
-
-```text
-工具 → 管理库
-```
-
-安装以下库：
-
-- `WiFiNINA`
-- `ArduinoMqttClient`
-- `ArduinoBearSSL`
-- `ArduinoECCX08`
-- `Arduino_MKRENV`，仅货架 1 使用
-- `DFRobot_HX711_I2C`，仅货架 2 使用
-
-还需要在 Arduino IDE 中安装 Arduino MKR WiFi 1010 开发板支持包，并使用 Firmware Updater 更新 NINA Wi-Fi 固件。
-
-## 配置设备密码和证书
-
-每个货架固件目录中都有一个：
-
-```text
-secrets.example.h
-```
-
-将它复制为：
-
-```text
-secrets.h
-```
-
-然后填写：
-
-- Wi-Fi 名称
-- Wi-Fi 密码
-- AWS IoT Endpoint
-- AWS IoT Client ID
-- 对应设备的证书
-
-示例：
-
-```cpp
-#define SECRET_SSID "你的WiFi名称"
-#define SECRET_PASS "你的WiFi密码"
-
-#define AWS_CLIENT_ID "smart-shelf-01"
-#define AWS_IOT_ENDPOINT "你的Endpoint-ats.iot.eu-west-2.amazonaws.com"
-#define AWS_IOT_PORT 8883
-```
-
-两个物理设备必须使用不同的 AWS IoT Thing、Client ID 和设备证书。
-
-`secrets.h` 已被 `.gitignore` 排除，禁止将它上传到 GitHub。
-
-## 默认报警阈值
-
-### 货架 1
-
-| 项目 | 默认值 |
-|---|---:|
-| 最低温度 | 2 °C |
-| 最高温度 | 8 °C |
-| 最低湿度 | 30% RH |
-| 最高湿度 | 70% RH |
-| 顾客检测距离 | 80 cm |
-| 光线变化阈值 | 60 |
-| 环境报警延迟 | 30 秒 |
-
-### 货架 2
-
-| 项目 | 默认值 |
-|---|---:|
-| 遮挡光线阈值 | 小于 100 |
-| 声音报警阈值 | 大于 150 |
-| 低库存阈值 | 不超过 25 g |
-| 无库存阈值 | 不超过 1 g |
-
-货架 2 的状态优先级为：
-
-```text
-人工求助 → 遮挡报警 → 声音报警 → 无库存 → 低库存 → 正常
-```
-
-光线和声音并不是只读取一次。程序会在每个 5 秒上传周期内记录最低光线值和最高声音值，从而提高短时间异常事件的检测能力。
-
-## 创建 AWS 云端资源
-
-`infra/cloudformation.yaml` 可以创建：
-
-- `SmartShelfTelemetry` 遥测数据表
-- `SmartShelfAnalysis` 分析结果表
-- AWS IoT 数据写入规则
-- 设备使用的最小权限 IoT Policy
-
-可以在 AWS CloudFormation 控制台中上传该文件并创建 Stack，建议区域选择：
-
-```text
-eu-west-2
-```
-
-CloudFormation 不会自动为物理设备创建和配置证书。每块 Arduino 的 Thing、证书和 ATECC608A 安全芯片仍需分别配置。
-
-## 编译 Arduino 固件
-
-### 货架 1
-
-在 Arduino IDE 中打开：
-
-```text
-firmware/shelf1_env_engagement/shelf1_env_engagement.ino
-```
-
-选择：
-
-```text
-开发板：Arduino MKR WiFi 1010
-端口：Arduino 当前连接的串口
-```
-
-先点击“验证”，确认编译成功，再点击“上传”。
-
-### 货架 2
-
-打开：
-
-```text
-firmware/shelf2_inventory_assistance/shelf2_inventory_assistance.ino
-```
-
-同样先验证，再上传到第二块 MKR WiFi 1010。
-
-## 编译并运行 Java 服务
-
-运行要求：
-
-- Java 17 或更高版本
-- Maven 3.9 或更高版本
-- 已配置 AWS Profile、IAM Role 或其他临时 AWS 凭据
-
-禁止把 AWS Access Key 写入 Java 源码或网页文件。
-
-在 PowerShell 中进入云端服务目录：
-
-```powershell
-cd cloud-service
-```
-
-编译：
-
-```powershell
-mvn clean package
-```
-
-设置运行参数：
+Java 运行示例：
 
 ```powershell
 $env:AWS_REGION = "eu-west-2"
-$env:AWS_PROFILE = "你的AWS配置名称"
-$env:AWS_IOT_DATA_ENDPOINT = "https://你的Endpoint-ats.iot.eu-west-2.amazonaws.com"
-$env:API_TOKEN = "设置一个较长的随机字符串"
-```
-
-启动服务：
-
-```powershell
+$env:AWS_PROFILE = "your-profile"
+$env:AWS_IOT_DATA_ENDPOINT = "https://your-endpoint-ats.iot.eu-west-2.amazonaws.com"
+$env:API_TOKEN = "a-long-random-token"
+cd cloud-service
+mvn clean package
 java -jar target/smart-shelf-cloud-service-1.0.0.jar
 ```
 
-然后在浏览器中打开：
+Spring Boot + MySQL 扩展的配置和 API 见 [模块说明](spring-alert-service/README.md)。
 
-```text
-http://127.0.0.1:8080
-```
+## 验证分层
 
-在网页顶部输入与 `API_TOKEN` 相同的内容，再点击“Apply token”。Token 只保存在当前浏览器标签页的 `sessionStorage` 中。
+当前仓库把验证证据分为两层：CI 持续执行硬件无关的 C++、协议和服务回归；接入具体开发板、传感器与 AWS 账号后，按测试计划补充串口、弱网、证书和实物执行器记录。这样代码级结论与现场验证证据保持可追溯，不混用测试口径。
 
-## Java 服务所需 AWS 权限
+## License
 
-运行 Java 服务的 IAM 身份只需要：
-
-- 对两个 DynamoDB 表执行 `dynamodb:Query`
-- 对 `SmartShelfAnalysis` 执行 `dynamodb:PutItem`
-- 对 `smartshelf/cmd/*` 执行 `iot:Publish`
-
-请遵循最小权限原则，不要授予不必要的管理员权限。
-
-## 安全说明
-
-- 不要上传 `secrets.h`
-- 不要上传 `SECRET_SSID.txt`
-- 不要在 HTML 中写入 AWS Access Key 或 Secret Key
-- 不要上传 `.env`、私钥或真实密码
-- 原 HTML 中出现过的 AWS Access Key 应立即在 IAM 中停用并删除
-- 上传前运行 `git status`，检查即将提交的文件
-- 仓库公开前，确认报告中的团队姓名和邮箱可以公开
-
-原来的 `Back.ino` 没有继续使用。它使用公共匿名 MQTT Broker，并且包含写死的 Wi-Fi 信息。优化后的两个货架固件已经直接集成了经过 AWS IoT TLS 验证的远程控制功能。
-
-## 自动化测试
-
-云服务包含环境告警、交互率、缺货和人工报警的单元测试。在项目根目录执行：
-
-```powershell
-cd cloud-service
-mvn test
-```
-
-推送到 GitHub 后，GitHub Actions 会使用 Java 17 自动运行测试并构建可执行 JAR。Arduino 固件仍需根据实际开发板、传感器接线和证书配置在本地完成编译与实物验证。
-
-### Python AIoT测试框架
-
-`iot-test-harness/` 提供设备—MQTT—云端链路的硬件无关自动化测试，覆盖：
-
-- 两类货架遥测JSON契约和传感器边界值；
-- MQTT命令主题、设备隔离、命令与配置白名单；
-- 重复消息幂等、乱序拒绝和同时间戳冲突检测；
-- 断线重连指数退避和恢复后的数据连续性；
-- 50000条遥测消息的确定性稳定性与故障注入场景。
-
-```powershell
-cd iot-test-harness
-python -m pip install -e ".[test]"
-python -m pytest
-python tools/run_stability.py --messages 50000
-```
-
-完整范围、分层策略和通过标准见[`iot-test-harness/docs/TEST_PLAN.md`](iot-test-harness/docs/TEST_PLAN.md)，本地实测结果见[`iot-test-harness/docs/TEST_REPORT.md`](iot-test-harness/docs/TEST_REPORT.md)。该自动化模块不能替代Arduino实物、传感器精度、Wi-Fi弱网、TLS证书和AWS IoT在线验证，相关结果只有在真实环境执行后才会记录。
-
-## 上传到 GitHub
-
-第一次上传：
-
-```powershell
-git add .
-git status
-git commit -m "上传智能货架项目优化版"
-git branch -M main
-git remote add origin https://github.com/你的用户名/smart-supermarket-shelf.git
-git push -u origin main
-```
-
-以后更新代码：
-
-```powershell
-git add .
-git status
-git commit -m "说明本次修改内容"
-git push
-```
+[MIT](LICENSE)

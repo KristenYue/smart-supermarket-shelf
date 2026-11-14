@@ -6,6 +6,8 @@
 #include <DFRobot_HX711_I2C.h>
 
 #include "secrets.h"
+#include "../core/include/smart_shelf/fixed_outbox.hpp"
+#include "../core/include/smart_shelf/shelf2_controller.hpp"
 
 namespace Pins {
 constexpr uint8_t sound = A0;
@@ -19,6 +21,7 @@ WiFiClient wifiClient;
 BearSSLClient tlsClient(wifiClient);
 MqttClient mqttClient(tlsClient);
 DFRobot_HX711_I2C scale;
+smart_shelf::FixedOutbox<4, 96, 512> mqttOutbox;
 
 String telemetryTopic;
 String eventsTopic;
@@ -26,21 +29,8 @@ String alertsTopic;
 String commandTopic;
 String configTopic;
 
-struct Thresholds {
-  int lightMin = 100;
-  int soundMax = 150;
-  float lowStockG = 25.0f;
-  float outOfStockG = 1.0f;
-} thresholds;
-
-enum ShelfState {
-  NORMAL,
-  ALERT_LIGHT,
-  ALERT_SOUND,
-  LOW_STOCK,
-  OUT_OF_STOCK,
-  MANUAL_ALARM
-};
+smart_shelf::Shelf2Thresholds thresholds;
+using smart_shelf::ShelfState;
 
 constexpr unsigned long SAMPLE_INTERVAL_MS = 100;
 constexpr unsigned long TELEMETRY_INTERVAL_MS = 5000;
@@ -59,22 +49,13 @@ bool buttonLatched = false;
 bool scaleAvailable = false;
 bool remoteActuatorOverride = false;
 bool remoteActuatorOn = false;
-ShelfState currentState = NORMAL;
-ShelfState previousState = NORMAL;
+ShelfState currentState = ShelfState::Normal;
+ShelfState previousState = ShelfState::Normal;
+unsigned long telemetrySequence = 0;
+unsigned long bootId = 1;
 
 unsigned long networkTime() {
   return WiFi.getTime();
-}
-
-const char *stateName(ShelfState state) {
-  switch (state) {
-    case ALERT_LIGHT: return "ALERT_LIGHT";
-    case ALERT_SOUND: return "ALERT_SOUND";
-    case LOW_STOCK: return "LOW_STOCK";
-    case OUT_OF_STOCK: return "OUT_OF_STOCK";
-    case MANUAL_ALARM: return "MANUAL_ALARM";
-    default: return "NORMAL";
-  }
 }
 
 String jsonEscape(const String &input) {
@@ -94,16 +75,35 @@ String jsonEscape(const String &input) {
   return out;
 }
 
-void publishJson(const String &topic, const String &payload, bool retained = false) {
-  if (!mqttClient.connected()) return;
-  mqttClient.beginMessage(topic, payload.length(), retained, 1);
+bool sendJson(const char *topic, const char *payload, bool retained, int qos) {
+  if (!mqttClient.connected()) return false;
+  mqttClient.beginMessage(topic, strlen(payload), retained, qos);
   mqttClient.print(payload);
-  mqttClient.endMessage();
+  return mqttClient.endMessage() == 1;
+}
+
+void publishJson(const String &topic, const String &payload, bool retained = false) {
+  if (sendJson(topic.c_str(), payload.c_str(), retained, 1)) return;
+  const auto result = mqttOutbox.push(topic.c_str(), payload.c_str(), retained, 1);
+  if (result == smart_shelf::EnqueueResult::RejectedOversize) {
+    Serial.println("MQTT outbox rejected an oversized frame");
+  }
+}
+
+void flushOutbox() {
+  while (mqttClient.connected() && mqttOutbox.front() != nullptr) {
+    const auto *frame = mqttOutbox.front();
+    if (!sendJson(frame->topic.data(), frame->payload.data(), frame->retained, frame->qos)) {
+      return;
+    }
+    mqttOutbox.pop();
+  }
 }
 
 void publishEvent(const char *eventName, const String &detail) {
   String payload = "{\"deviceID\":\"" + String(AWS_CLIENT_ID) +
-                   "\",\"timestamp\":" + String(networkTime()) +
+                   "\",\"schemaVersion\":\"2.0\",\"bootId\":" + String(bootId) +
+                   ",\"timestamp\":" + String(networkTime()) +
                    ",\"event\":\"" + eventName +
                    "\",\"detail\":\"" + jsonEscape(detail) + "\"}";
   publishJson(eventsTopic, payload);
@@ -111,8 +111,9 @@ void publishEvent(const char *eventName, const String &detail) {
 
 void publishAlert(ShelfState state, bool active) {
   String payload = "{\"deviceID\":\"" + String(AWS_CLIENT_ID) +
-                   "\",\"timestamp\":" + String(networkTime()) +
-                   ",\"type\":\"" + stateName(state) +
+                   "\",\"schemaVersion\":\"2.0\",\"bootId\":" + String(bootId) +
+                   ",\"timestamp\":" + String(networkTime()) +
+                   ",\"type\":\"" + smart_shelf::to_string(state) +
                    "\",\"active\":" + String(active ? "true" : "false") + "}";
   publishJson(alertsTopic, payload);
 }
@@ -138,21 +139,21 @@ void applyStateActuator(ShelfState state) {
   noTone(Pins::buzzer);
   digitalWrite(Pins::led, LOW);
   switch (state) {
-    case ALERT_LIGHT:
+    case ShelfState::AlertLight:
       digitalWrite(Pins::led, HIGH);
       break;
-    case ALERT_SOUND:
+    case ShelfState::AlertSound:
       beep(1200, 120, 80, 1);
       break;
-    case LOW_STOCK:
+    case ShelfState::LowStock:
       beep(1000, 180, 0, 1);
       digitalWrite(Pins::led, HIGH);
       break;
-    case OUT_OF_STOCK:
+    case ShelfState::OutOfStock:
       beep(800, 220, 120, 2);
       digitalWrite(Pins::led, HIGH);
       break;
-    case MANUAL_ALARM:
+    case ShelfState::ManualAlarm:
       beep(900, 220, 100, 3);
       digitalWrite(Pins::led, HIGH);
       break;
@@ -179,36 +180,38 @@ void sampleSensors(unsigned long now) {
   maximumSound = max(maximumSound, analogRead(Pins::sound));
 }
 
-ShelfState decideState() {
-  // Immediate human requests and abnormal physical events take priority.
-  if (buttonLatched) return MANUAL_ALARM;
-  if (minimumLight < thresholds.lightMin) return ALERT_LIGHT;
-  if (maximumSound > thresholds.soundMax) return ALERT_SOUND;
-  if (scaleAvailable && weightG <= thresholds.outOfStockG) return OUT_OF_STOCK;
-  if (scaleAvailable && weightG <= thresholds.lowStockG) return LOW_STOCK;
-  return NORMAL;
-}
-
 void publishTelemetry() {
   weightG = scaleAvailable ? scale.readWeight() : -1.0f;
   if (weightG >= 0.0f && weightG <= 0.5f) weightG = 0.0f;
 
-  currentState = decideState();
+  const smart_shelf::Shelf2SensorSnapshot snapshot{
+      minimumLight, maximumSound, weightG, scaleAvailable, buttonLatched};
+  currentState = smart_shelf::evaluate(snapshot, thresholds);
   if (currentState != previousState) {
-    if (previousState != NORMAL) publishAlert(previousState, false);
+    if (previousState != ShelfState::Normal) publishAlert(previousState, false);
     applyStateActuator(currentState);
-    if (currentState != NORMAL) publishAlert(currentState, true);
-    publishEvent("state_changed", String(stateName(previousState)) + "->" + stateName(currentState));
+    if (currentState != ShelfState::Normal) publishAlert(currentState, true);
+    publishEvent("state_changed", String(smart_shelf::to_string(previousState)) + "->" +
+                                      smart_shelf::to_string(currentState));
     previousState = currentState;
   }
 
+  const unsigned long sequence = ++telemetrySequence;
+  const unsigned long timestamp = networkTime();
+  const bool timeSynchronized = timestamp >= 1609459200UL;
   String payload = "{\"deviceID\":\"" + String(AWS_CLIENT_ID) +
-                   "\",\"timestamp\":" + String(networkTime()) +
+                   "\",\"schemaVersion\":\"2.0\",\"messageId\":\"" +
+                   String(AWS_CLIENT_ID) + ":" + String(bootId) + ":" + String(sequence) +
+                   "\",\"bootId\":" + String(bootId) +
+                   ",\"sequence\":" + String(sequence) +
+                   ",\"timestamp\":" + String(timeSynchronized ? timestamp : 0) +
+                   ",\"timeSynchronized\":" +
+                   String(timeSynchronized ? "true" : "false") +
                    ",\"weightG\":" + String(weightG, 1) +
                    ",\"soundRaw\":" + String(maximumSound) +
                    ",\"lightRaw\":" + String(minimumLight) +
                    ",\"buttonPressed\":" + String(buttonLatched ? "true" : "false") +
-                   ",\"state\":\"" + stateName(currentState) +
+                   ",\"state\":\"" + smart_shelf::to_string(currentState) +
                    "\",\"uptimeMs\":" + String(millis()) +
                    ",\"scaleHealthy\":" + String(scaleAvailable ? "true" : "false") + "}";
   publishJson(telemetryTopic, payload);
@@ -258,11 +261,17 @@ void handleMessage(int messageSize) {
   }
 
   if (topic == configTopic) {
-    thresholds.lightMin = static_cast<int>(jsonNumber(message, "lightMin", thresholds.lightMin));
-    thresholds.soundMax = static_cast<int>(jsonNumber(message, "soundMax", thresholds.soundMax));
-    thresholds.lowStockG = jsonNumber(message, "lowStockG", thresholds.lowStockG);
-    thresholds.outOfStockG = jsonNumber(message, "outOfStockG", thresholds.outOfStockG);
-    publishEvent("configuration_updated", "Shelf 2 thresholds updated");
+    auto candidate = thresholds;
+    candidate.light_min = static_cast<int>(jsonNumber(message, "lightMin", candidate.light_min));
+    candidate.sound_max = static_cast<int>(jsonNumber(message, "soundMax", candidate.sound_max));
+    candidate.low_stock_g = jsonNumber(message, "lowStockG", candidate.low_stock_g);
+    candidate.out_of_stock_g = jsonNumber(message, "outOfStockG", candidate.out_of_stock_g);
+    if (smart_shelf::validate(candidate) == smart_shelf::ThresholdError::None) {
+      thresholds = candidate;
+      publishEvent("configuration_updated", "Shelf 2 thresholds updated");
+    } else {
+      publishEvent("configuration_rejected", "Shelf 2 thresholds failed validation");
+    }
   }
 }
 
@@ -294,7 +303,8 @@ bool connectMqtt() {
   }
   mqttClient.subscribe(commandTopic);
   mqttClient.subscribe(configTopic);
-  publishEvent("boot", "Shelf 2 connected");
+  flushOutbox();
+  publishEvent("connected", "Shelf 2 MQTT session established");
   return true;
 }
 
@@ -306,6 +316,9 @@ void setup() {
   pinMode(Pins::button, INPUT_PULLUP);
   pinMode(Pins::led, OUTPUT);
   pinMode(Pins::buzzer, OUTPUT);
+  randomSeed(static_cast<unsigned long>(analogRead(Pins::light)) ^
+             (static_cast<unsigned long>(analogRead(Pins::sound)) << 10) ^ micros());
+  bootId = static_cast<unsigned long>(random(1L, 2147483647L));
 
   telemetryTopic = "smartshelf/" + String(AWS_CLIENT_ID) + "/telemetry";
   eventsTopic = "smartshelf/" + String(AWS_CLIENT_ID) + "/events";
@@ -337,8 +350,10 @@ void loop() {
   if ((WiFi.status() != WL_CONNECTED || !mqttClient.connected()) && now >= nextConnectionAttemptMs) {
     if (!connectWiFi() || !connectMqtt()) nextConnectionAttemptMs = now + 5000;
   }
-  if (WiFi.status() != WL_CONNECTED || !mqttClient.connected()) return;
-  mqttClient.poll();
+  if (WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
+    mqttClient.poll();
+    flushOutbox();
+  }
 
   if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
     lastSampleMs = now;

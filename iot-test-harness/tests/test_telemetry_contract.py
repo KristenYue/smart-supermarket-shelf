@@ -15,7 +15,21 @@ def test_shelf2_valid_payload_is_accepted(shelf2_payload):
     assert validate_telemetry(shelf2_payload) == shelf2_payload
 
 
-@pytest.mark.parametrize("field", ["deviceID", "timestamp", "temperatureC", "humidityPct", "pressureKPa"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "deviceID",
+        "schemaVersion",
+        "messageId",
+        "bootId",
+        "sequence",
+        "timestamp",
+        "timeSynchronized",
+        "temperatureC",
+        "humidityPct",
+        "pressureKPa",
+    ],
+)
 def test_shelf1_rejects_missing_required_field(shelf1_payload, field):
     shelf1_payload.pop(field)
     with pytest.raises(ContractError, match="missing required fields"):
@@ -76,3 +90,20 @@ def test_input_payload_is_not_mutated(shelf1_payload):
     validated = validate_telemetry(shelf1_payload)
     validated["temperatureC"] = 99
     assert shelf1_payload["temperatureC"] == 5.0
+
+
+def test_message_identity_must_match_device_boot_and_sequence(shelf1_payload):
+    shelf1_payload["messageId"] = "smart-shelf-01:9999:1"
+    with pytest.raises(ContractError, match="messageId"):
+        validate_telemetry(shelf1_payload)
+
+
+def test_unsynchronized_device_may_report_zero_timestamp(shelf1_payload):
+    shelf1_payload.update(timestamp=0, timeSynchronized=False)
+    assert validate_telemetry(shelf1_payload)["sequence"] == 1
+
+
+def test_synchronized_device_must_report_positive_timestamp(shelf1_payload):
+    shelf1_payload["timestamp"] = 0
+    with pytest.raises(ContractError, match="positive"):
+        validate_telemetry(shelf1_payload)

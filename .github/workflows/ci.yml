@@ -11,6 +11,18 @@ permissions:
   contents: read
 
 jobs:
+  firmware-core:
+    name: C++17 固件核心测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: 配置 CMake
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: 编译固件核心
+        run: cmake --build build --config Release
+      - name: 运行状态机与离线队列测试
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
   iot-test-harness:
     name: Python AIoT 自动化测试
     runs-on: ubuntu-latest
@@ -18,9 +30,9 @@ jobs:
       run:
         working-directory: iot-test-harness
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: 安装 Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -39,9 +51,9 @@ jobs:
       run:
         working-directory: cloud-service
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: 安装 Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
@@ -49,3 +61,21 @@ jobs:
           cache-dependency-path: cloud-service/pom.xml
       - name: 运行测试并构建
         run: mvn --batch-mode verify
+
+  spring-alert-service:
+    name: Spring 告警服务测试
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: spring-alert-service
+    steps:
+      - uses: actions/checkout@v7
+      - name: 安装 Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: spring-alert-service/pom.xml
+      - name: 运行测试
+        run: mvn --batch-mode test
