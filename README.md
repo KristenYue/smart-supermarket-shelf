@@ -618,7 +618,7 @@ smart-supermarket-shelf/
 
 # 项目证明的工程能力
 
-本项目重点展示：
+本项目亮点技术：
 
 - 使用 C++17 实现可移植的嵌入式状态机；
 - 在资源受限设备中控制内存上界；
@@ -632,18 +632,6 @@ smart-supermarket-shelf/
 - 使用 Java、Spring 和 AWS IoT 构建设备云端链路；
 - 使用 CTest、pytest、Maven 和 GitHub Actions 建立分层质量门禁；
 - 将 Bad Case 沉淀为可复现、可回归的工程证据。
-
-适配岗位方向：
-
-- 嵌入式软件开发
-- C++ 软件开发
-- IoT/AIoT 平台开发
-- 智能硬件软件开发
-- 设备云平台开发
-- 工业软件与边缘计算
-- 仿真验证与测试开发
-
----
 
 ## 当前验证范围
 
