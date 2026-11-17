@@ -26,7 +26,7 @@ jobs:
         run: |
           for sketch in firmware/shelf1_env_engagement firmware/shelf2_inventory_assistance; do
             cp "$sketch/secrets.example.h" "$sketch/secrets.h"
-            arduino-cli compile --fqbn arduino:samd:mkrwifi1010 --build-property compiler.cpp.extra_flags=-std=gnu++17 "$sketch"
+            arduino-cli compile --fqbn arduino:samd:mkrwifi1010 --build-property "compiler.cpp.extra_flags=-std=gnu++17 -I${GITHUB_WORKSPACE}/${sketch}" "$sketch"
           done
 
   firmware-core:
