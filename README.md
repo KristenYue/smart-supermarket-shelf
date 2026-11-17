@@ -47,6 +47,20 @@ flowchart LR
 
 [固件架构、配置与验证范围](docs/FIRMWARE_VALIDATION.md) · [Telemetry v2 协议](docs/TELEMETRY_V2.md) · [50,000 条输入复现实验](iot-test-harness/tools/run_stability.py)
 
+## MKR WiFi 1010 目标板构建
+
+两个设备节点均通过 GitHub Actions 的 Arduino SAMD 目标板编译。编译器报告的资源占用如下：
+
+| 固件节点 | Flash 占用 | 静态 SRAM 占用 | 剩余 SRAM |
+| --- | ---: | ---: | ---: |
+| 环境与顾客互动节点 | **146,268 B（55%）** | **24,480 B（74%）** | 8,288 B |
+| 库存与人工求助节点 | **144,372 B（55%）** | **24,460 B（74%）** | 8,308 B |
+
+板卡资源上限为 262,144 B Flash 和 32,768 B SRAM。静态 SRAM 数据来自编译器报告，剩余空间供运行时栈与堆共享。真机弱网下的采样与重连表现仍待现场测量。
+
+[两个固件的编译与资源报告](https://github.com/KristenYue/smart-supermarket-shelf/actions/runs/44069954492/job/133993365036)
+
+
 ## 上层应用接入
 
 [工业设备诊断与任务编排平台](https://github.com/KristenYue/telecom-network-incident-agent)通过货架已有的云端接口读取 MQTT 来源的遥测。只读适配器检查设备身份和服务端接收时间，遇到过期数据时返回遥测不可用。当前用合成云端响应覆盖了库存告警和过期数据分支。[查看诊断侧接入说明](https://github.com/KristenYue/telecom-network-incident-agent/blob/main/docs/INDUSTRIAL_AGENT.md)
