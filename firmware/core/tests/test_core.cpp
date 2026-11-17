@@ -1,4 +1,6 @@
 #include "smart_shelf/fixed_outbox.hpp"
+#include "smart_shelf/config_version.hpp"
+#include "smart_shelf/reconnect_backoff.hpp"
 #include "smart_shelf/shelf2_controller.hpp"
 
 #include <cstring>
@@ -78,11 +80,40 @@ void test_fixed_outbox() {
     expect(outbox.push("telemetry", oversized) == EnqueueResult::RejectedOversize,
            "oversize frame rejected");
     expect(outbox.rejected() == 1, "oversize rejection counted");
+    expect(outbox.size() == 1 && std::strcmp(outbox.front()->payload.data(), "three") == 0,
+           "rejected frame leaves queued data intact");
+    expect(outbox.push("telemetry", "four") == EnqueueResult::Enqueued, "enqueue after wrap");
+    expect(outbox.pop(), "pop retained head");
+    expect(std::strcmp(outbox.front()->payload.data(), "four") == 0, "FIFO after wrap");
+    expect(outbox.pop() && !outbox.pop() && outbox.front() == nullptr, "empty queue boundary");
+    using FirmwareOutbox = smart_shelf::FixedOutbox<4, 96, 512>;
+    std::cout << "Host ABI firmware outbox bytes: " << sizeof(FirmwareOutbox) << '\n';
 }
 
 }  // namespace
 
 int main() {
+    using smart_shelf::VersionDecision;
+    smart_shelf::ConfigVersion version;
+    std::uint32_t requested = 0;
+    expect(version.check("{}", requested) == VersionDecision::Apply, "legacy configuration on boot");
+    expect(version.check(R"({"configVersion" : 42})", requested) == VersionDecision::Apply &&
+           requested == 42, "new version is eligible");
+    version.effective = requested;
+    expect(version.check(R"({"configVersion":42})", requested) == VersionDecision::Stale, "duplicate");
+    expect(version.check(R"({"configVersion":41})", requested) == VersionDecision::Stale, "out of order");
+    expect(version.check("{}", requested) == VersionDecision::Stale, "legacy cannot overwrite a version");
+    expect(version.check(R"({"configVersion":4294967296})", requested) == VersionDecision::Invalid, "overflow");
+    expect(version.check(R"({"configVersion":44.5})", requested) == VersionDecision::Invalid, "fraction");
+    smart_shelf::ReconnectBackoff reconnect;
+    expect(reconnect.ready(0), "initial attempt is immediately eligible");
+    reconnect.failed(UINT32_MAX - 499U);
+    expect(!reconnect.ready(499), "retry interval has not elapsed after rollover");
+    expect(reconnect.ready(500), "retry becomes eligible after rollover");
+    for (int i = 0; i < 10; ++i) reconnect.failed(500);
+    expect(!reconnect.ready(30499) && reconnect.ready(30500), "retry interval caps at 30s");
+    reconnect.connected();
+    expect(reconnect.ready(501), "successful connection resets backoff");
     test_state_priority_and_boundaries();
     test_threshold_validation();
     test_fixed_outbox();

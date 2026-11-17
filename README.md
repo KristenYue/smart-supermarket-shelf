@@ -1,5 +1,9 @@
 # AIoT 智能货架与端云可靠性系统
 
+## 双节点固件与端云证据
+
+共享重连退避、配置版本和回执已经通过固件核心宿主机测试。目标板编译与现场弱网数据以相应验收记录为准。[架构、模块与验证范围](docs/FIRMWARE_VALIDATION.md)
+
 [![工程持续集成](https://github.com/KristenYue/smart-supermarket-shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/KristenYue/smart-supermarket-shelf/actions/workflows/ci.yml)
 ![C++17](https://img.shields.io/badge/边缘固件-C%2B%2B17-00599C)
 ![Python 3.12](https://img.shields.io/badge/自动化验证-Python%203.12-3776AB)

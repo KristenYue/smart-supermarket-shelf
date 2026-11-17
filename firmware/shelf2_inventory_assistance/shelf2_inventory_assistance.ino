@@ -7,6 +7,8 @@
 
 #include "secrets.h"
 #include "../core/include/smart_shelf/fixed_outbox.hpp"
+#include "../core/include/smart_shelf/reconnect_backoff.hpp"
+#include "../core/include/smart_shelf/config_version.hpp"
 #include "../core/include/smart_shelf/shelf2_controller.hpp"
 
 namespace Pins {
@@ -28,6 +30,7 @@ String eventsTopic;
 String alertsTopic;
 String commandTopic;
 String configTopic;
+smart_shelf::ConfigVersion configVersion;
 
 smart_shelf::Shelf2Thresholds thresholds;
 using smart_shelf::ShelfState;
@@ -261,6 +264,18 @@ void handleMessage(int messageSize) {
   }
 
   if (topic == configTopic) {
+    if (message == "GET") {
+      publishEvent("configuration_status", "effectiveVersion=" + String(configVersion.effective));
+      return;
+    }
+    uint32_t requestedVersion = 0;
+    const auto decision = configVersion.check(message.c_str(), requestedVersion);
+    if (decision != smart_shelf::VersionDecision::Apply) {
+      publishEvent("configuration_rejected",
+                   String(decision == smart_shelf::VersionDecision::Stale ? "stale_or_duplicate" : "invalid_version") +
+                   ";effectiveVersion=" + String(configVersion.effective));
+      return;
+    }
     auto candidate = thresholds;
     candidate.light_min = static_cast<int>(jsonNumber(message, "lightMin", candidate.light_min));
     candidate.sound_max = static_cast<int>(jsonNumber(message, "soundMax", candidate.sound_max));
@@ -268,29 +283,19 @@ void handleMessage(int messageSize) {
     candidate.out_of_stock_g = jsonNumber(message, "outOfStockG", candidate.out_of_stock_g);
     if (smart_shelf::validate(candidate) == smart_shelf::ThresholdError::None) {
       thresholds = candidate;
-      publishEvent("configuration_updated", "Shelf 2 thresholds updated");
+      configVersion.effective = requestedVersion;
+      publishEvent("configuration_updated", "effectiveVersion=" + String(configVersion.effective));
     } else {
-      publishEvent("configuration_rejected", "Shelf 2 thresholds failed validation");
+      publishEvent("configuration_rejected", "invalid_thresholds;effectiveVersion=" + String(configVersion.effective));
     }
   }
 }
 
 bool connectWiFi() {
-  if (WiFi.status() == WL_CONNECTED) return true;
-  Serial.print("Connecting to Wi-Fi");
-  for (uint8_t attempt = 0; attempt < 10; ++attempt) {
-    if (WiFi.begin(SECRET_SSID, SECRET_PASS) == WL_CONNECTED) {
-      Serial.println(" connected");
-      for (uint8_t timeAttempt = 0; timeAttempt < 20 && networkTime() < 1609459200UL; ++timeAttempt) {
-        delay(500);
-      }
-      return true;
-    }
-    Serial.print('.');
-    delay(2000);
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.begin(SECRET_SSID, SECRET_PASS);
   }
-  Serial.println(" failed");
-  return false;
+  return WiFi.status() == WL_CONNECTED;
 }
 
 bool connectMqtt() {
@@ -344,16 +349,8 @@ void setup() {
 }
 
 void loop() {
-  static unsigned long nextConnectionAttemptMs = 0;
+  static smart_shelf::ReconnectBackoff reconnect;
   const unsigned long now = millis();
-
-  if ((WiFi.status() != WL_CONNECTED || !mqttClient.connected()) && now >= nextConnectionAttemptMs) {
-    if (!connectWiFi() || !connectMqtt()) nextConnectionAttemptMs = now + 5000;
-  }
-  if (WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
-    mqttClient.poll();
-    flushOutbox();
-  }
 
   if (now - lastSampleMs >= SAMPLE_INTERVAL_MS) {
     lastSampleMs = now;
@@ -362,5 +359,17 @@ void loop() {
   if (now - lastTelemetryMs >= TELEMETRY_INTERVAL_MS) {
     lastTelemetryMs = now;
     publishTelemetry();
+  }
+
+  if (WiFi.status() == WL_CONNECTED && mqttClient.connected()) {
+    reconnect.connected();
+    mqttClient.poll();
+    flushOutbox();
+  } else if (reconnect.ready(millis())) {
+    if (connectWiFi() && networkTime() >= 1609459200UL && connectMqtt()) {
+      reconnect.connected();
+    } else {
+      reconnect.failed(millis());
+    }
   }
 }

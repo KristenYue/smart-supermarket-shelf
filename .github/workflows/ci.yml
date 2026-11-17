@@ -11,6 +11,24 @@ permissions:
   contents: read
 
 jobs:
+  firmware-mkr-wifi-1010:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install board core and sensor libraries
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install arduino:samd
+          arduino-cli lib install WiFiNINA ArduinoMqttClient ArduinoBearSSL ArduinoECCX08 Arduino_MKRENV DFRobot_HX711_I2C
+      - name: Compile both sketches and report Flash and SRAM
+        run: |
+          for sketch in firmware/shelf1_env_engagement firmware/shelf2_inventory_assistance; do
+            cp "$sketch/secrets.example.h" "$sketch/secrets.h"
+            arduino-cli compile --fqbn arduino:samd:mkrwifi1010 --build-property compiler.cpp.extra_flags=-std=gnu++17 "$sketch"
+          done
+
   firmware-core:
     name: C++17 固件核心测试
     runs-on: ubuntu-latest
