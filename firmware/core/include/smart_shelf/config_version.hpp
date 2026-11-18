@@ -11,7 +11,7 @@ struct ConfigVersion {
     std::uint32_t effective{0};
 
     VersionDecision check(std::string_view message, std::uint32_t& requested) const {
-        const std::string_view key{"\"configVersion\""};
+        constexpr auto key = std::string_view{"\"configVersion\""};
         const auto field = message.find(key);
         requested = 0;
         if (field == std::string_view::npos) {

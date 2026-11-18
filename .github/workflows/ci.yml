@@ -21,15 +21,12 @@ jobs:
         run: |
           arduino-cli core update-index
           arduino-cli core install arduino:samd
-                    arduino-cli lib install WiFiNINA ArduinoMqttClient ArduinoBearSSL ArduinoECCX08 Arduino_MKRENV DFRobot_HX711_I2C@1.0.0
-          # Fix the malformed trailing comment in the HX711 v1.0.0 address macro.
-          hx711_header="$HOME/Arduino/libraries/DFRobot_HX711_I2C/DFRobot_HX711_I2C.h"
-          sed -i -E 's/^(#define[[:space:]]+HX711_I2C_ADDR[[:space:]]+\(0x64\)).*$/\1/' "$hx711_header"
+          arduino-cli lib install WiFiNINA ArduinoMqttClient ArduinoBearSSL ArduinoECCX08 Arduino_MKRENV DFRobot_HX711_I2C
       - name: Compile both sketches and report Flash and SRAM
         run: |
           for sketch in firmware/shelf1_env_engagement firmware/shelf2_inventory_assistance; do
             cp "$sketch/secrets.example.h" "$sketch/secrets.h"
-            arduino-cli compile --fqbn arduino:samd:mkrwifi1010 --build-property "compiler.cpp.extra_flags=-std=gnu++17 -I${GITHUB_WORKSPACE}/${sketch}" "$sketch"
+            arduino-cli compile --fqbn arduino:samd:mkrwifi1010 --build-property compiler.cpp.extra_flags=-std=gnu++17 "$sketch"
           done
 
   firmware-core:
