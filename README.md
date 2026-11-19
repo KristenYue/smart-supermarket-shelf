@@ -99,7 +99,7 @@ flowchart TB
 
 ## 场景一：双节点遥测到云端应用
 
-![双节点采样、消息身份与遥测上云](docs/assets/telemetry-flow.gif)
+![双节点采样、消息身份与遥测上云](assets/telemetry-flow.gif)
 
 > 工程流程示意动画，非实物运行录像。合成实验、固件核心与实际设备验证分别记录。
 
@@ -164,7 +164,7 @@ GET /api/shelves/{deviceId}/telemetry?limit=1
 
 ## 场景二：断网恢复与远程配置
 
-![离线缓存、恢复补发与配置回执](docs/assets/reconnect-config-flow.gif)
+![离线缓存、恢复补发与配置回执](assets/reconnect-config-flow.gif)
 
 > 动画展示通信与配置机制。实物弱网表现需要结合设备日志单独验证。
 
