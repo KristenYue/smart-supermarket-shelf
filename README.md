@@ -1,164 +1,96 @@
-# AIoT Edge-to-Cloud — 智能设备与端云数据接入系统
+# AIoT 智能货架与端云通信系统
 
-[![CI](https://github.com/KristenYue/smart-supermarket-shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/KristenYue/smart-supermarket-shelf/actions/workflows/ci.yml)
-![C++17](https://img.shields.io/badge/firmware-C%2B%2B17-00599C)
-![AWS IoT](https://img.shields.io/badge/cloud-AWS%20IoT-FF9900)
-![Java 17](https://img.shields.io/badge/backend-Java%2017-ED8B00)
+![项目能力与执行流程](docs/assets/overview.gif)
 
-## Project Overview
+<sub>架构流程示意动画 · [静态版本](docs/assets/overview.png) · 动画不作为实测结果。</sub>
 
-双节点 AIoT 端云系统。两台 Arduino MKR WiFi 1010 采集环境、顾客互动和库存信号，在边缘完成状态判断与现场告警，通过 ATECC608A 设备身份和 MQTT/TLS 接入 AWS IoT Core，云端提供存储、分析、查询和控制接口。
+[返回技术作品集](https://github.com/KristenYue/KristenYue) · [机器人业务](https://github.com/KristenYue/telecom-network-incident-agent/blob/main/docs/ROBOT_DELIVERY.md) · [原生模型 SDK](https://github.com/KristenYue/edge-device-verification-lab/tree/main/inference_sdk) · [车辆 Agent](https://github.com/KristenYue/telecom-network-incident-agent/blob/main/docs/VEHICLE_ADAPTER.md)
 
-项目同时向 [Industrial AI Agent](https://github.com/KristenYue/telecom-network-incident-agent)提供只读设备遥测接口，使 Agent 能够查询最新设备状态、识别低库存或遥测失联，并将 IoT 数据与 Runbook 关联。
 
-## Application Scenarios
+**Arduino MKR WiFi 1010 · C++17 · MQTT / TLS · AWS IoT · DynamoDB · Java 17**
 
-| 节点/应用 | 输入 | 边缘行为 | 云端与 AI 应用 |
-|---|---|---|---|
-| `smart-shelf-01` | 温度、湿度、气压、超声波、光线 | 环境持续异常告警，统计靠近和商品互动 | 环境趋势、互动分析、设备状态查询 |
-| `smart-shelf-02` | 重量、光线、声音、求助按钮 | 判断遮挡、碰撞、低库存、无库存和人工求助 | 库存预警、告警同步、Agent 诊断 |
-| 设备配置 | MQTT `/config` | 校验版本、字段和阈值关系后原子提交 | 配置回执、当前版本查询、旧版本拒绝 |
-| 断网恢复 | 本地采样与待发消息 | 固定容量 Outbox、重连退避、FIFO 补发 | 端云恢复后的顺序与丢弃计数 |
+双节点分别感知环境与库存，把传感器输入转为本地状态、告警和遥测；网络恢复后有序补发，云端按消息身份处理重复与乱序，并通过查询 API 向应用和 Agent 提供最新设备信息。
 
-货架 2 的本地状态优先级：
+**本项目承担的证据：端侧状态逻辑 + 通信恢复 + 云端数据一致性。** 机器人、汽车和工业设备岗位可重点看消息身份、配置版本、离线策略和设备工具接口；具体实现来自智能货架场景。
 
-```text
-人工求助 > 遮挡异常 > 声音异常 > 无库存 > 低库存 > 正常
-```
-
-## Features & Real Demonstration
-
-### 双节点 Telemetry v2
-
-每条遥测使用 `{deviceID}:{bootId}:{sequence}` 作为 `messageId`：
-
-- `deviceID` 隔离两台设备；
-- `bootId` 区分重启前后的会话；
-- `sequence` 保证同一会话内单调顺序；
-- `timeSynchronized` 明确标记时间是否可信；
-- AWS IoT Rule 生成 `receivedAt`，避免未校时消息覆盖正确数据。
-
-### 50,000 条合成遥测实验
-
-稳定性脚本使用固定种子生成 **50,000 条双设备合成遥测**，注入重复和乱序，核对接收、分类和持久化计数。该实验验证协议与数据处理逻辑，不等同于 50,000 条真实硬件遥测。
-
-### Agent 只读设备工具
-
-工业 Agent 通过既有接口读取：
-
-```http
-GET /api/shelves/{deviceId}/telemetry?limit=1
-```
-
-适配器校验设备 ID、来源、接收时间和状态取值。旧遥测不会被解释为当前设备故障，而是返回 `TELEMETRY_STALE`；低库存状态映射到对应设备 Runbook。
-
-## System Architecture
+## 业务与架构
 
 ```mermaid
 flowchart LR
-    S1[Shelf 1\nENV · ultrasonic · light] --> E[Edge State & Alert]
-    S2[Shelf 2\nweight · light · sound · button] --> E
-    E --> O[Fixed-capacity Outbox]
-    O --> M[ATECC608A Identity\nMQTT/TLS]
-    M --> A[AWS IoT Core]
+    E[环境节点 / 互动传感] --> S[本地状态与告警]
+    I[库存节点 / 重量与按钮] --> S
+    S --> O[固定容量 Outbox]
+    O --> M[设备身份 / MQTT TLS]
+    M --> A[AWS IoT]
     A --> D[(DynamoDB)]
-    D --> J[Java Analysis & Query API]
-    J --> UI[Dashboard]
-    J --> G[Industrial AI Agent\nread-only telemetry tool]
-    A --> C[Versioned Config & Receipt]
-    C --> E
+    D --> J[Java 查询与分析 API]
+    J --> U[应用 / Agent 只读工具]
+    A --> C[版本化配置与回执]
+    C --> S
 ```
 
-## Core Implementation
+环境节点读取温湿度、气压、超声波与光线；库存节点读取重量、光线、声音与按钮。库存状态优先级为 **人工求助 → 遮挡 → 声音异常 → 无库存 → 低库存 → 正常**。
 
-| 模块 | 实现 |
-|---|---|
-| Edge Core | C++17 状态机、阈值约束、固定容量 `FixedOutbox<4,96,512>`，无动态内存 |
-| Device Identity | 独立 Thing / Client ID / 证书，ATECC608A 私钥，BearSSL |
-| Connectivity | MQTT QoS 1、1/2/4/8/16/30 秒重连退避、网络时钟检查 |
-| Telemetry | boot-aware message ID、服务端接收时间、重复/冲突/乱序分类 |
-| Configuration | `configVersion` 单调递增、完整参数校验、应用/拒绝/状态回执 |
-| Cloud | AWS IoT Rule、DynamoDB、Java 17/Javalin 查询分析 API |
-| Alert Extension | Spring Boot、MySQL、设备隔离与告警查询 |
-| Agent Adapter | 固定上游、Token、时间新鲜度和只读工具边界 |
+## 三个核心工程设计
 
-硬件访问保留在 `.ino` 适配层；状态机、配置版本、重连退避和 Outbox 位于 `firmware/core/`，可由标准 C++17 编译器在宿主机运行。
+| 问题 | 实现 | 工程价值 |
+|---|---|---|
+| **设备重启与重复上报怎样区分** | `deviceID:bootId:sequence` 消息身份；平台 `receivedAt` 与采样时间分别保存；同身份不同载荷单独分类 | 避免重启序列与旧会话混淆，重复、乱序、冲突不覆盖有效状态。[Telemetry v2](docs/TELEMETRY_V2.md) |
+| **断网怎样继续采样并限制资源** | 固定容量 `FixedOutbox<4,96,512>`；满队列淘汰最旧项并计数；重连按 1 / 2 / 4 / 8 / 16 / 30 秒退避 | 离线策略、内存上限与数据取舍明确；计时使用差值处理回绕。[Outbox](firmware/core/include/smart_shelf/fixed_outbox.hpp) · [重连](firmware/core/include/smart_shelf/reconnect_backoff.hpp) |
+| **乱序配置怎样避免参数回滚** | 单调 `configVersion`；参数及阈值关系校验后原子提交；成功 / 拒绝 / 状态回执 | 控制面和数据面均有可追溯身份。[配置版本](firmware/core/include/smart_shelf/config_version.hpp) |
 
-## Engineering Results
+硬件访问位于 `.ino` 适配层，共享状态、队列与配置逻辑位于 `firmware/core/`，可在宿主机验证，保留目标板独立编译入口。
 
-| 结果 | 说明 |
-|---|---|
-| 双设备独立状态与消息身份 | 避免重启、重复投递和跨设备串扰 |
-| 固定容量离线队列 | 断网时缓存有限数量消息；满队列淘汰最旧项并记录计数 |
-| 配置版本与回执 | 重复/旧版本不能回滚新配置，`GET` 返回当前生效版本 |
-| 50,000 条合成遥测 | 固定种子下验证双节点、重复、乱序与持久化计数 |
-| Agent 查询接入 | 最新遥测可作为工业 Agent 的设备状态工具 |
-| 宿主机固件核心 | Windows/MSVC CTest 通过；同型 Outbox 对象在该 ABI 下为 2,496 字节 |
+## 量化结果：协议一致性
 
-## Industry Applications
+Windows / Python 3.12.9，固定种子 `20261102`，**50,000 条双节点合成遥测**：
 
-- **半导体与 AI 芯片：** 设备遥测、状态告警、配置管理和研发 Agent 数据接口。
-- **智能汽车：** 端云状态同步、设备身份、车端配置版本和智能场景数据接入。
-- **具身智能：** 机器人传感器节点、状态上报、云端查询与 Agent 设备工具。
+| 分类 | 条数 | 系统行为 |
+|---|---:|---|
+| 正常数据 | **48,512** | 入库数量与 accepted 计数一致 |
+| 重复消息 | **1,012** | 拦截重复 |
+| 会话内乱序 | **13** | 不覆盖有效顺序 |
+| 同身份载荷冲突 | **463** | 显式冲突分类 |
+| 总计 | **50,000** | 四类计数完整闭合 |
 
-这些是端云架构的迁移方向；当前实现是智能货架节点，不代表真实产线、车辆或机器人部署。
+[原始实验报告](iot-test-harness/docs/TEST_REPORT.md)。这是合成协议与持久化实验，不将脚本处理速度表述为 AWS 吞吐或实物采样能力。Windows x64 同型 Outbox 对象尺寸 **2,496 字节**，属于宿主机 ABI，目标板 SRAM 以编译报告为准。
 
-## Quick Start
+## 与 AI 应用怎样连接
 
-### 固件核心
+云端 `GET /api/shelves/{deviceId}/telemetry?limit=1` 提供最新遥测，[Agent Adapter](https://github.com/KristenYue/telecom-network-incident-agent/blob/main/src/telecom_incident_agent/shelf_adapter.py)校验设备身份、来源、状态及新鲜度。低库存可关联设备知识；旧遥测返回 `TELEMETRY_STALE`，避免将过去状态解释为当前故障。
+
+## 运行与交付
+
+固件核心：
 
 ```powershell
 .\scripts\build_firmware_core.cmd
 ```
 
-### 遥测与协议
+协议场景：
 
-```powershell
+```bash
 cd iot-test-harness
-python -m pip install -e ".[test]"
-python -m pytest
-python tools\run_stability.py --messages 50000
+python -m pip install -e '.[test]'
+python tools/run_stability.py --messages 50000
 ```
 
-### Java 服务
+Java 服务：
 
-```powershell
+```bash
 cd cloud-service
 mvn --batch-mode verify
-$env:AWS_REGION = "eu-west-2"
-$env:AWS_PROFILE = "your-profile"
-$env:AWS_IOT_DATA_ENDPOINT = "https://your-endpoint-ats.iot.eu-west-2.amazonaws.com"
-$env:API_TOKEN = "a-long-random-token"
-java -jar target\smart-shelf-cloud-service-1.0.0.jar
 ```
 
-真实设备需要分别创建 AWS IoT Thing 和证书，将私钥写入各自 ATECC608A，并从 `secrets.example.h` 创建本地 `secrets.h`。私钥、证书、`.env` 和 `secrets.h` 不进入仓库。
+AWS 部署需配置本机凭据、区域、IoT 数据端点与 API Token。固件从 `secrets.example.h` 创建本地 `secrets.h`；身份材料不进入公开仓库。目标板编译入口见 [CI](.github/workflows/ci.yml)，运行边界见 [固件交付说明](docs/FIRMWARE_VALIDATION.md)。
 
-## Evidence & Source Code
+## 工程证据与 Bad Case
 
-| 内容 | 入口 |
-|---|---|
-| 库存状态机 | [shelf2_controller.hpp](firmware/core/include/smart_shelf/shelf2_controller.hpp) |
-| 固定 Outbox | [fixed_outbox.hpp](firmware/core/include/smart_shelf/fixed_outbox.hpp) |
-| 重连退避 | [reconnect_backoff.hpp](firmware/core/include/smart_shelf/reconnect_backoff.hpp) |
-| 配置版本 | [config_version.hpp](firmware/core/include/smart_shelf/config_version.hpp) |
-| Telemetry v2 | [TELEMETRY_V2.md](docs/TELEMETRY_V2.md) |
-| 固件与联网边界 | [FIRMWARE_VALIDATION.md](docs/FIRMWARE_VALIDATION.md) |
-| 50,000 条实验报告 | [TEST_REPORT.md](iot-test-harness/docs/TEST_REPORT.md) |
-| Agent 适配 | [Industrial AI Agent](https://github.com/KristenYue/telecom-network-incident-agent) |
+[状态机](firmware/core/include/smart_shelf/shelf2_controller.hpp) · [云端服务](cloud-service) · [工程日志](docs/ENGINEERING_LOG.md) · [Bad Case](docs/BAD_CASES.md)
 
-## Validation & Limitations
+关键问题包括：旧配置覆盖新配置、重启后序号重复、32 位计时回绕、满队列淘汰、未校时时间覆盖。MQTT QoS 1 交付与云端业务成功是两个环节；当前出队依据 MQTT 发送接口结果，业务 ACK 另有边界。真机弱网、传感器精度和目标板资源需独立记录，不与合成实验混算。
 
-- 两台 Arduino MKR WiFi 1010、传感器和 AWS IoT 架构来自项目设备设计；自动化回归主要在宿主机和合成遥测环境执行。
-- 50,000 条数据是合成协议实验，不是线上设备采集或生产吞吐结论。
-- `FixedOutbox` 的 2,496 字节是 Windows x64 ABI 对象尺寸，不是 Arduino 目标板 SRAM 报告。
-- 目标板 Flash/SRAM 使用量应以 Arduino 编译输出为准；当前仓库尚未形成可公开的目标板构建报告，因此不填写推测数字。
-- WiFiNINA、TLS 和 ArduinoMqttClient 仍可能阻塞单次调用；本地状态采样与现场告警并非完整实时操作系统任务。
-- MQTT QoS 1 确认传输，不等于云端业务处理成功；当前没有独立的端云业务 ACK。
-- Agent 回归使用合成云端响应，不声称持续在线的真实 AWS 设备联调。
 
-详细测试、Bad Case 和硬件验收要求见 [FIRMWARE_VALIDATION.md](docs/FIRMWARE_VALIDATION.md)、[ENGINEERING_LOG.md](docs/ENGINEERING_LOG.md) 与 [BAD_CASES.md](docs/BAD_CASES.md)。
+---
 
-## License
-
-[MIT](LICENSE)
+文档与结果口径：2026-11-19。功能以对应源码和运行记录为准；场景、执行环境和数据来源随结果一并标注。
